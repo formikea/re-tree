@@ -1,0 +1,169 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+model Species {
+  id                Int      @id @default(autoincrement())
+  botanicalName     String?
+  commonName        String?
+  maoriName         String?
+  threatenedSpecies Boolean  @default(false)
+  treesThatCount    Boolean  @default(false)
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  batches           Batch[]
+  organisationSpecies OrganisationSpecies[]
+
+  @@map("species")
+}
+
+model Site {
+  id             Int          @id @default(autoincrement())
+  name           String
+  region         String?
+  coordinates    String?
+  area           Decimal?     @db.Decimal(10, 2)
+  owner          String?
+  type           String?
+  notes          String?
+  organisationId Int
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  seasons        Season[]
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@map("sites")
+}
+
+model Batch {
+  id         Int             @id @default(autoincrement())
+  speciesId  Int
+  quantity   Int?
+  notes      String?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  nurseryId  Int
+  origin     String?
+  stage      BatchStageEnum?
+  isOrder    Boolean         @default(false)
+  completedAt DateTime?
+  allotments Allotment[]
+  nursery    Nursery         @relation(fields: [nurseryId], references: [id], onDelete: Cascade)
+  species    Species         @relation(fields: [speciesId], references: [id], onDelete: Cascade)
+
+  @@map("batches")
+}
+
+model Season {
+  id             Int          @id @default(autoincrement())
+  siteId         Int
+  organisationId Int
+  year           Int
+  season         SeasonEnum
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  allotments     Allotment[]
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  site           Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, year, season])
+  @@map("seasons")
+}
+
+model Allotment {
+  id        Int      @id @default(autoincrement())
+  batchId   Int
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  seasonId  Int
+  batch     Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  season    Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+
+  @@map("allotments")
+}
+
+model User {
+  id             Int          @id @default(autoincrement())
+  name           String?
+  email          String       @unique
+  password       String
+  organisationId Int
+  role           Role         @default(USER)
+  tokenVersion   Int          @default(0)
+  emailVerified  Boolean      @default(false)
+  invitationToken String?     @unique
+  invitationExpires DateTime?
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@map("users")
+}
+
+model Organisation {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  nurseries Nursery[]
+  seasons   Season[]
+  sites     Site[]
+  users     User[]
+  organisationSpecies OrganisationSpecies[]
+
+  @@map("organisations")
+}
+
+model Nursery {
+  id             Int          @id @default(autoincrement())
+  name           String
+  organisationId Int
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  batches        Batch[]
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+
+  @@map("nurseries")
+}
+
+model OrganisationSpecies {
+  id             Int          @id @default(autoincrement())
+  organisationId Int
+  speciesId      Int
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  species        Species      @relation(fields: [speciesId], references: [id], onDelete: Cascade)
+
+  @@unique([organisationId, speciesId])
+  @@map("organisation_species")
+}
+
+enum BatchStageEnum {
+  seed
+  prick
+  pot
+  plant
+}
+
+enum SeasonEnum {
+  winter
+  spring
+  summer
+  autumn
+}
+
+enum Role {
+  USER
+  MANAGER
+  SUPER_ADMIN
+}

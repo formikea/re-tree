@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/dist
+.git
+.env
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+*.md
+!README.md
+!apps/api/README.md
+.cursor
+.wrangler

@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build / generated
+dist/
+*.tsbuildinfo
+prisma/generated/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.production
+.dev.vars
+
+# Wrangler
+.wrangler/
+
+# Logs
+*.log

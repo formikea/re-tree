@@ -1,0 +1,29 @@
+{
+  "name": "re-tree",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @re-tree/api",
+    "dev:client": "npm run dev -w @re-tree/client",
+    "dev:website": "npm run dev -w @re-tree/website",
+    "build": "npm run build -w @re-tree/api && npm run build -w @re-tree/client && npm run build -w @re-tree/website",
+    "build:api": "npm run build -w @re-tree/api",
+    "build:client": "npm run build -w @re-tree/client",
+    "build:website": "npm run build -w @re-tree/website",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:generate": "npm run db:generate -w @re-tree/api",
+    "db:migrate": "npm run db:migrate -w @re-tree/api",
+    "migrate:deploy": "npm run migrate:deploy -w @re-tree/api",
+    "db:seed": "npm run db:seed -w @re-tree/api",
+    "db:studio": "npm run db:studio -w @re-tree/api",
+    "db:bootstrap": "npm run db:generate -w @re-tree/api && npm run migrate:deploy -w @re-tree/api && npm run db:seed -w @re-tree/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

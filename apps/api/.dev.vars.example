@@ -1,0 +1,9 @@
+# Copy to apps/api/.dev.vars for `npm run dev:worker`.
+# Same keys as .env; Wrangler loads this for local Workers.
+
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/re_tree_db
+JWT_SECRET=your-super-secret-jwt-key-change-in-production
+REFRESH_TOKEN_SECRET=your-super-secret-refresh-token-key-change-in-production
+INVITATION_SECRET=your-invitation-secret-change-in-production
+FRONTEND_URL=http://localhost:3000
+NODE_ENV=development

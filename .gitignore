@@ -1,0 +1,61 @@
+# ================== Root-level cross-cutting ignores ==================
+# Per-app ignores live under apps/*/.gitignore.
+# This root file covers the monorepo-level stuff plus a defensive safety net.
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.swn
+.idea/
+*.code-workspace
+
+# --- Env files (defensive — keep .env.example committed) ---
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.dev
+**/.env.test
+**/.env.prod
+**/.env.production
+**/.env.development
+!**/.env.example
+!**/.env.*.example
+!**/.dev.vars.example
+
+# --- Node / npm ---
+node_modules/
+apps/**/package-lock.json
+dist/
+dist-ssr/
+*.tsbuildinfo
+.eslintcache
+**/out_dev/
+**/out_prod/
+**/out_local/
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Local sqlite caches ---
+http_cache.sqlite
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Wrangler ---
+.wrangler/
+.dev.vars
+**/.dev.vars
+
+# --- Docker / compose local overrides ---
+docker-compose.override.yml
+docker-compose.*.local.yml
+
+# --- Misc ---
+_misc/

@@ -1,0 +1,131 @@
+# re-tree dev stack: API (Hono + Node) + Client + Website + PostgreSQL.
+#
+# Architecture:
+#   - Default `docker compose up`: `postgres`, `api` (Node), `client`, `website`.
+#   - npm workspaces: install at repo root; apps share one node_modules volume.
+#   - Node API schema: `make migrate-prisma` (Prisma Migrate) from the repo root.
+#   - Services with build: + image: re-tree-*-dev use pull_policy: never so
+#     Compose does not try to pull those tags from Docker Hub (they are local only).
+#
+# Host ports:
+#   5000  -> api     (Hono + tsx watch; browsers call this)
+#   3000  -> client  (Vite)
+#   3001  -> website (Vite)
+#   5432  -> postgres
+
+name: re-tree
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: re-tree-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_DB: re_tree_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d re_tree_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    pull_policy: never
+    image: re-tree-api-dev:latest
+    container_name: re-tree-api
+    working_dir: /workspaces/re-tree
+    volumes:
+      - .:/workspaces/re-tree
+      - node_modules:/workspaces/re-tree/node_modules
+    env_file:
+      - path: ./apps/api/.env
+        required: false
+    environment:
+      PORT: "5000"
+      DATABASE_URL: "postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/re_tree_db"
+      DIRECT_URL: "postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/re_tree_db"
+      FRONTEND_URL: "http://localhost:3000"
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -d node_modules/.bin ]; then npm ci --no-audit --no-fund; fi
+        exec npm run dev -w @re-tree/api
+
+  client:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    pull_policy: never
+    image: re-tree-client-dev:latest
+    container_name: re-tree-client
+    working_dir: /workspaces/re-tree
+    volumes:
+      - .:/workspaces/re-tree
+      - node_modules:/workspaces/re-tree/node_modules
+    env_file:
+      - path: ./apps/client/.env.development
+        required: false
+    environment:
+      VITE_API_BASE_URL: "http://localhost:5000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    stdin_open: true
+    tty: true
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -d node_modules/.bin ]; then npm ci --no-audit --no-fund; fi
+        exec npm run dev -w @re-tree/client -- --host 0.0.0.0 --port 3000
+
+  website:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    pull_policy: never
+    image: re-tree-website-dev:latest
+    container_name: re-tree-website
+    working_dir: /workspaces/re-tree
+    volumes:
+      - .:/workspaces/re-tree
+      - node_modules:/workspaces/re-tree/node_modules
+    env_file:
+      - path: ./apps/website/.env.development
+        required: false
+    environment:
+      VITE_API_BASE_URL: "http://localhost:5000"
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+    stdin_open: true
+    tty: true
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -d node_modules/.bin ]; then npm ci --no-audit --no-fund; fi
+        exec npm run dev -w @re-tree/website -- --host 0.0.0.0 --port 3001
+
+volumes:
+  postgres_data:
+  node_modules:
+    name: re-tree_node_modules
