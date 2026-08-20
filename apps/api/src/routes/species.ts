@@ -1,29 +1,29 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { prisma } from '#prisma'
+import { eq, and, desc } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { species, organisations, organisationSpecies } from '../db/schema.js'
 import {
   CreateSpeciesSchema,
   UpdateSpeciesSchema
 } from '../schemas/species.js'
 import { authenticate } from '../middleware/auth.js'
 
-const species = new Hono()
+const routes = new Hono()
 
 // Apply authentication middleware to all species routes
-species.use('*', authenticate)
+routes.use('*', authenticate)
 
 // Get all species (global - not organization specific)
-species.get('/', async (c) => {
+routes.get('/', async (c) => {
   try {
-    const species = await prisma.species.findMany({
-      orderBy: {
-        createdAt: 'desc'
-      }
+    const speciesList = await db.query.species.findMany({
+      orderBy: desc(species.createdAt)
     })
 
     return c.json({
-      species,
-      count: species.length,
+      species: speciesList,
+      count: speciesList.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -36,27 +36,24 @@ species.get('/', async (c) => {
 })
 
 // Get species for a specific organisation
-species.get('/organisation/:organisationId', async (c) => {
+routes.get('/organisation/:organisationId', async (c) => {
   try {
-    const organisationId = parseInt(c.req.param('organisationId'))
+    const organisationId = parseInt(c.req.param('organisationId') ?? '', 10)
     
-    const organisationSpecies = await prisma.organisationSpecies.findMany({
-      where: { organisationId },
-      include: {
+    const mappings = await db.query.organisationSpecies.findMany({
+      where: eq(organisationSpecies.organisationId, organisationId),
+      with: {
         species: true
-      },
-      orderBy: {
-        species: {
-          createdAt: 'desc'
-        }
       }
     })
 
-    const species = organisationSpecies.map((os: any) => os.species)
+    const speciesList = mappings
+      .map((os) => os.species)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
 
     return c.json({
-      species,
-      count: species.length,
+      species: speciesList,
+      count: speciesList.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -69,9 +66,9 @@ species.get('/organisation/:organisationId', async (c) => {
 })
 
 // Add species to organisation
-species.post('/organisation/:organisationId', async (c) => {
+routes.post('/organisation/:organisationId', async (c) => {
   try {
-    const organisationId = parseInt(c.req.param('organisationId'))
+    const organisationId = parseInt(c.req.param('organisationId') ?? '', 10)
     const body = await c.req.json()
     const { speciesId } = body
 
@@ -83,8 +80,8 @@ species.post('/organisation/:organisationId', async (c) => {
     }
 
     // Check if organisation exists
-    const organisation = await prisma.organisation.findUnique({
-      where: { id: organisationId }
+    const organisation = await db.query.organisations.findFirst({
+      where: eq(organisations.id, organisationId)
     })
 
     if (!organisation) {
@@ -95,11 +92,11 @@ species.post('/organisation/:organisationId', async (c) => {
     }
 
     // Check if species exists
-    const species = await prisma.species.findUnique({
-      where: { id: speciesId }
+    const speciesRow = await db.query.species.findFirst({
+      where: eq(species.id, speciesId)
     })
 
-    if (!species) {
+    if (!speciesRow) {
       return c.json({ 
         error: 'Species not found',
         timestamp: new Date().toISOString()
@@ -107,13 +104,11 @@ species.post('/organisation/:organisationId', async (c) => {
     }
 
     // Check if mapping already exists
-    const existingMapping = await prisma.organisationSpecies.findUnique({
-      where: {
-        organisationId_speciesId: {
-          organisationId,
-          speciesId
-        }
-      }
+    const existingMapping = await db.query.organisationSpecies.findFirst({
+      where: and(
+        eq(organisationSpecies.organisationId, organisationId),
+        eq(organisationSpecies.speciesId, speciesId)
+      )
     })
 
     if (existingMapping) {
@@ -123,18 +118,24 @@ species.post('/organisation/:organisationId', async (c) => {
       }, 409)
     }
 
-    const organisationSpecies = await prisma.organisationSpecies.create({
-      data: {
-        organisationId,
-        speciesId
-      },
-      include: {
+    const [inserted] = await db.insert(organisationSpecies).values({
+      organisationId,
+      speciesId
+    }).returning()
+
+    if (!inserted) {
+      throw new Error('Failed to create species mapping')
+    }
+
+    const mapping = await db.query.organisationSpecies.findFirst({
+      where: eq(organisationSpecies.id, inserted.id),
+      with: {
         species: true
       }
     })
 
     return c.json({
-      organisationSpecies,
+      organisationSpecies: mapping,
       message: 'Species added to organisation successfully',
       timestamp: new Date().toISOString()
     }, 201)
@@ -148,19 +149,17 @@ species.post('/organisation/:organisationId', async (c) => {
 })
 
 // Remove species from organisation
-species.delete('/organisation/:organisationId/:speciesId', async (c) => {
+routes.delete('/organisation/:organisationId/:speciesId', async (c) => {
   try {
-    const organisationId = parseInt(c.req.param('organisationId'))
-    const speciesId = parseInt(c.req.param('speciesId'))
+    const organisationId = parseInt(c.req.param('organisationId') ?? '', 10)
+    const speciesId = parseInt(c.req.param('speciesId') ?? '', 10)
 
     // Check if mapping exists
-    const existingMapping = await prisma.organisationSpecies.findUnique({
-      where: {
-        organisationId_speciesId: {
-          organisationId,
-          speciesId
-        }
-      }
+    const existingMapping = await db.query.organisationSpecies.findFirst({
+      where: and(
+        eq(organisationSpecies.organisationId, organisationId),
+        eq(organisationSpecies.speciesId, speciesId)
+      )
     })
 
     if (!existingMapping) {
@@ -170,14 +169,12 @@ species.delete('/organisation/:organisationId/:speciesId', async (c) => {
       }, 404)
     }
 
-    await prisma.organisationSpecies.delete({
-      where: {
-        organisationId_speciesId: {
-          organisationId,
-          speciesId
-        }
-      }
-    })
+    await db.delete(organisationSpecies).where(
+      and(
+        eq(organisationSpecies.organisationId, organisationId),
+        eq(organisationSpecies.speciesId, speciesId)
+      )
+    )
 
     return c.json({
       message: 'Species removed from organisation successfully',
@@ -193,15 +190,15 @@ species.delete('/organisation/:organisationId/:speciesId', async (c) => {
 })
 
 // Get species by ID
-species.get('/:id', async (c) => {
+routes.get('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     
-    const species = await prisma.species.findUnique({
-      where: { id }
+    const speciesRow = await db.query.species.findFirst({
+      where: eq(species.id, id)
     })
 
-    if (!species) {
+    if (!speciesRow) {
       return c.json({ 
         error: 'Species not found',
         timestamp: new Date().toISOString()
@@ -209,7 +206,7 @@ species.get('/:id', async (c) => {
     }
 
     return c.json({
-      species,
+      species: speciesRow,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -222,23 +219,21 @@ species.get('/:id', async (c) => {
 })
 
 // Create new species
-species.post('/', zValidator('json', CreateSpeciesSchema), async (c) => {
+routes.post('/', zValidator('json', CreateSpeciesSchema), async (c) => {
   try {
     const body = c.req.valid('json')
     
-    const species = await prisma.species.create({
-      data: {
-        botanicalName: body.botanicalName || null,
-        commonName: body.commonName || null,
-        maoriName: body.maoriName || null,
-        threatenedSpecies: body.threatenedSpecies,
-        treesThatCount: body.treesThatCount,
-        notes: body.notes || null
-      }
-    })
+    const [speciesRow] = await db.insert(species).values({
+      botanicalName: body.botanicalName || null,
+      commonName: body.commonName || null,
+      maoriName: body.maoriName || null,
+      threatenedSpecies: body.threatenedSpecies,
+      treesThatCount: body.treesThatCount,
+      notes: body.notes || null
+    }).returning()
 
     return c.json({
-      species,
+      species: speciesRow,
       message: 'Species created successfully',
       timestamp: new Date().toISOString()
     }, 201)
@@ -252,14 +247,14 @@ species.post('/', zValidator('json', CreateSpeciesSchema), async (c) => {
 })
 
 // Update species
-species.put('/:id', zValidator('json', UpdateSpeciesSchema), async (c) => {
+routes.put('/:id', zValidator('json', UpdateSpeciesSchema), async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const body = c.req.valid('json')
 
     // Check if species exists
-    const existingSpecies = await prisma.species.findUnique({
-      where: { id }
+    const existingSpecies = await db.query.species.findFirst({
+      where: eq(species.id, id)
     })
 
     if (!existingSpecies) {
@@ -269,20 +264,18 @@ species.put('/:id', zValidator('json', UpdateSpeciesSchema), async (c) => {
       }, 404)
     }
 
-    const species = await prisma.species.update({
-      where: { id },
-      data: {
-        ...(body.botanicalName !== undefined && { botanicalName: body.botanicalName || null }),
-        ...(body.commonName !== undefined && { commonName: body.commonName || null }),
-        ...(body.maoriName !== undefined && { maoriName: body.maoriName || null }),
-        ...(body.threatenedSpecies !== undefined && { threatenedSpecies: body.threatenedSpecies }),
-        ...(body.treesThatCount !== undefined && { treesThatCount: body.treesThatCount }),
-        ...(body.notes !== undefined && { notes: body.notes || null })
-      }
-    })
+    const [speciesRow] = await db.update(species).set({
+      ...(body.botanicalName !== undefined && { botanicalName: body.botanicalName || null }),
+      ...(body.commonName !== undefined && { commonName: body.commonName || null }),
+      ...(body.maoriName !== undefined && { maoriName: body.maoriName || null }),
+      ...(body.threatenedSpecies !== undefined && { threatenedSpecies: body.threatenedSpecies }),
+      ...(body.treesThatCount !== undefined && { treesThatCount: body.treesThatCount }),
+      ...(body.notes !== undefined && { notes: body.notes || null }),
+      updatedAt: new Date()
+    }).where(eq(species.id, id)).returning()
 
     return c.json({
-      species,
+      species: speciesRow,
       message: 'Species updated successfully',
       timestamp: new Date().toISOString()
     })
@@ -296,13 +289,13 @@ species.put('/:id', zValidator('json', UpdateSpeciesSchema), async (c) => {
 })
 
 // Delete species
-species.delete('/:id', async (c) => {
+routes.delete('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
 
     // Check if species exists
-    const existingSpecies = await prisma.species.findUnique({
-      where: { id }
+    const existingSpecies = await db.query.species.findFirst({
+      where: eq(species.id, id)
     })
 
     if (!existingSpecies) {
@@ -312,9 +305,7 @@ species.delete('/:id', async (c) => {
       }, 404)
     }
 
-    await prisma.species.delete({
-      where: { id }
-    })
+    await db.delete(species).where(eq(species.id, id))
 
     return c.json({
       message: 'Species deleted successfully',
@@ -329,4 +320,4 @@ species.delete('/:id', async (c) => {
   }
 })
 
-export default species 
+export default routes

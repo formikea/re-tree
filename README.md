@@ -5,7 +5,7 @@ Monorepo for the Re-Tree platform (npm workspaces).
 ```
 re-tree/
 ├── apps/
-│   ├── api/        Hono + Prisma API (`@re-tree/api`; Cloudflare Worker)
+│   ├── api/        Hono + Drizzle API (`@re-tree/api`; Cloudflare Worker)
 │   ├── client/     React + Vite SPA (`@re-tree/client`; Cloudflare Pages)
 │   └── website/    Marketing site (`@re-tree/website`; Cloudflare Pages)
 ├── package.json    workspaces root + scripts
@@ -67,10 +67,10 @@ make dev            # start the stack
 make install        # npm ci (workspace root)
 make lint           # eslint (apps that define it)
 make typecheck      # tsc --noEmit
-make migrate-prisma     # prisma migrate deploy
-make migrate-prisma-new MSG="add foo"
-make seed-prisma        # prisma seed
-make db-bootstrap       # generate + migrate + seed
+make db-push            # drizzle-kit push
+make db-migrate-new MSG="add foo"
+make seed               # seed local database
+make db-bootstrap       # push schema + seed
 make shell-api
 make shell-client
 make shell-website
@@ -85,15 +85,15 @@ and fill in real values.
 
 | File | Purpose | Template |
 |---|---|---|
-| `apps/api/.env`                    | API (Prisma, JWT, Resend, Stripe) | `apps/api/.env.example` |
+| `apps/api/.env`                    | API (Drizzle, JWT, Resend, Stripe) | `apps/api/.env.example` |
 | `apps/client/.env.development`     | client Vite dev config            | `apps/client/.env.example` |
 | `apps/website/.env.development`    | website Vite dev config           | `apps/website/.env.example` |
 
 ## Apps
 
-### `apps/api` — Hono + Prisma (REST API)
+### `apps/api` — Hono + Drizzle (REST API)
 
-- Node 20+ (container: Node 22); Prisma Client + Prisma Migrate against PostgreSQL
+- Node 20+ (container: Node 22); Drizzle ORM against PostgreSQL (local Docker, Neon in production)
 - Package: `@re-tree/api`
 - Local: Node (`tsx watch`); production: Cloudflare Worker
 - See [apps/api/README.md](apps/api/README.md)
@@ -121,7 +121,7 @@ remains available for manual runs.
 | `client / deploy main`    | Pages `re-tree-client` at `https://app.re-tree.app` |
 | `website / deploy main`   | Pages `re-tree-website` at `https://re-tree.app` |
 
-Workers need a Postgres connection. Use [Hyperdrive](https://developers.cloudflare.com/hyperdrive/)
-pointing at your hosted Postgres, then set the Hyperdrive id in `apps/api/wrangler.jsonc`.
-Secrets (`JWT_SECRET`, `RESEND_API_KEY`, Stripe keys, etc.) go in Wrangler secrets,
-not in git.
+Workers need a Postgres connection. Production uses Neon’s serverless HTTP
+driver: set the Worker secret `DATABASE_URL` to a Neon connection string
+(the URL should include `neon.tech`). Secrets (`JWT_SECRET`, `RESEND_API_KEY`,
+Stripe keys, etc.) go in Wrangler secrets, not in git.

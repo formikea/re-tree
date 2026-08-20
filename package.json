@@ -21,9 +21,13 @@
     "migrate:deploy": "npm run migrate:deploy -w @re-tree/api",
     "db:seed": "npm run db:seed -w @re-tree/api",
     "db:studio": "npm run db:studio -w @re-tree/api",
-    "db:bootstrap": "npm run db:generate -w @re-tree/api && npm run migrate:deploy -w @re-tree/api && npm run db:seed -w @re-tree/api"
+    "db:push": "npm run db:push -w @re-tree/api",
+    "db:bootstrap": "npm run db:bootstrap -w @re-tree/api"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.7"
   }
 }

@@ -2,7 +2,6 @@ import app from './index.js'
 
 type Env = {
   DATABASE_URL?: string
-  HYPERDRIVE?: { connectionString: string }
   JWT_SECRET?: string
   REFRESH_TOKEN_SECRET?: string
   INVITATION_SECRET?: string
@@ -17,10 +16,8 @@ type Env = {
 }
 
 function applyEnv(env: Env) {
-  const url = env.HYPERDRIVE?.connectionString ?? env.DATABASE_URL
-  if (url) {
-    process.env.DATABASE_URL = url
-    process.env.DIRECT_URL = url
+  if (env.DATABASE_URL) {
+    process.env.DATABASE_URL = env.DATABASE_URL
   }
 
   const stringKeys = [

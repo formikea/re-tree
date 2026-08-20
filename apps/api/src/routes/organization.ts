@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
-import { prisma } from '#prisma'
+import { and, eq } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { users } from '../db/schema.js'
 import { authenticate } from '../middleware/auth.js'
-import bcrypt from 'bcryptjs'
-import { emailService } from '../lib/email.js'
+import { hashPassword } from '../lib/password.js'
 
 const organization = new Hono()
 
@@ -27,24 +28,9 @@ organization.get('/invite/verify/:token', async (c) => {
     }
 
     // Find user with this invitation token
-    const user = await prisma.user.findFirst({
-      where: {
-        invitationToken: token,
-        emailVerified: false
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        invitationExpires: true,
-        organisation: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
-      }
+    const user = await db.query.users.findFirst({
+      where: and(eq(users.invitationToken, token), eq(users.emailVerified, false)),
+      with: { organisation: true },
     })
 
     if (!user) {
@@ -108,11 +94,8 @@ organization.post('/invite/accept', async (c) => {
     }
 
     // Find user with this invitation token
-    const user = await prisma.user.findFirst({
-      where: {
-        invitationToken: token,
-        emailVerified: false
-      }
+    const user = await db.query.users.findFirst({
+      where: and(eq(users.invitationToken, token), eq(users.emailVerified, false)),
     })
 
     if (!user) {
@@ -133,28 +116,25 @@ organization.post('/invite/accept', async (c) => {
     }
 
     // Hash the new password
-    const hashedPassword = await bcrypt.hash(password, 10)
+    const hashedPassword = await hashPassword(password)
 
     // Update user: set password, mark as verified, clear invitation token
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        password: hashedPassword,
-        emailVerified: true,
-        invitationToken: null,
-        invitationExpires: null,
-        name: name || user.name
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        emailVerified: true,
-        organisationId: true,
-        createdAt: true,
-        updatedAt: true
-      }
+    const [updatedUser] = await db.update(users).set({
+      password: hashedPassword,
+      emailVerified: true,
+      invitationToken: null,
+      invitationExpires: null,
+      name: name || user.name,
+      updatedAt: new Date(),
+    }).where(eq(users.id, user.id)).returning({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      role: users.role,
+      emailVerified: users.emailVerified,
+      organisationId: users.organisationId,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
     })
 
     return c.json({

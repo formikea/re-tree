@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
-import { prisma } from '#prisma'
+import { eq, and } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { users, organisations } from '../db/schema.js'
 import { authenticate } from '../middleware/auth.js'
 import { 
   requireUserManagementInOrganization,
@@ -10,47 +12,64 @@ import {
   createOrganizationUserSchema,
   updateOrganizationUserSchema 
 } from '../schemas/organization.js'
-import bcrypt from 'bcryptjs'
 import { emailService } from '../lib/email.js'
 import { generateInvitationToken, getTokenExpiryDate } from '../lib/tokens.js'
+import { hashPassword } from '../lib/password.js'
 
-const users = new Hono()
+const routes = new Hono()
+
+const userPublicColumns = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  notes: true,
+  createdAt: true,
+  updatedAt: true
+} as const
+
+const userInviteReturning = {
+  id: users.id,
+  name: users.name,
+  email: users.email,
+  role: users.role,
+  emailVerified: users.emailVerified,
+  notes: users.notes,
+  createdAt: users.createdAt,
+  updatedAt: users.updatedAt
+}
+
+const userPublicReturning = {
+  id: users.id,
+  name: users.name,
+  email: users.email,
+  role: users.role,
+  notes: users.notes,
+  createdAt: users.createdAt,
+  updatedAt: users.updatedAt
+}
 
 // Apply authentication to all routes
-users.use('*', authenticate)
-
-
+routes.use('*', authenticate)
 
 // ===============================
 // ORGANIZATION USER MANAGEMENT ROUTES
 // ===============================
 
 // Get all users for the current user's organization
-users.get('/', requireManageOwnOrganization, async (c) => {
+routes.get('/', requireManageOwnOrganization, async (c) => {
   try {
     const user = c.get('user')
     
-    const users = await prisma.user.findMany({
-      where: {
-        organisationId: user.organisationId
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true
-      },
-      orderBy: {
-        name: 'asc'
-      }
+    const userList = await db.query.users.findMany({
+      where: eq(users.organisationId, user.organisationId),
+      columns: userPublicColumns,
+      orderBy: users.name
     })
 
     return c.json({
-      users,
-      count: users.length,
+      users: userList,
+      count: userList.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -64,10 +83,10 @@ users.get('/', requireManageOwnOrganization, async (c) => {
 })
 
 // Get user by ID within the current user's organization
-users.get('/:userId', requireManageOwnOrganization, async (c) => {
+routes.get('/:userId', requireManageOwnOrganization, async (c) => {
   try {
     const user = c.get('user')
-    const userId = parseInt(c.req.param('userId'))
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(userId)) {
       return c.json({
@@ -77,20 +96,12 @@ users.get('/:userId', requireManageOwnOrganization, async (c) => {
       }, 400)
     }
 
-    const targetUser = await prisma.user.findFirst({
-      where: {
-        id: userId,
-        organisationId: user.organisationId
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true
-      }
+    const targetUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, user.organisationId)
+      ),
+      columns: userPublicColumns
     })
 
     if (!targetUser) {
@@ -116,15 +127,15 @@ users.get('/:userId', requireManageOwnOrganization, async (c) => {
 })
 
 // Create user in the current user's organization
-users.post('/', requireManageOwnUsers, async (c) => {
+routes.post('/', requireManageOwnUsers, async (c) => {
   try {
     const user = c.get('user')
     const body = await c.req.json()
     const validatedData = createOrganizationUserSchema.parse(body)
 
     // Check if email already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email: validatedData.email }
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, validatedData.email)
     })
 
     if (existingUser) {
@@ -140,55 +151,49 @@ users.post('/', requireManageOwnUsers, async (c) => {
     const invitationExpires = getTokenExpiryDate(7) // 7 days
 
     // Create placeholder password (will be changed when user accepts invitation)
-    const placeholderPassword = await bcrypt.hash('placeholder', 10)
+    const placeholderPassword = await hashPassword('placeholder')
 
     // Get organization name for email
-    const organization = await prisma.organisation.findUnique({
-      where: { id: user.organisationId },
-      select: { name: true }
+    const organization = await db.query.organisations.findFirst({
+      where: eq(organisations.id, user.organisationId),
+      columns: { name: true }
     })
 
-    // Use transaction to ensure atomicity
-    const result = await prisma.$transaction(async (tx: any) => {
-      // Create user with unverified state
-      const newUser = await tx.user.create({
-        data: {
-          name: validatedData.name || null,
-          email: validatedData.email,
-          password: placeholderPassword,
-          role: validatedData.role || 'USER',
-          emailVerified: false,
-          invitationToken,
-          invitationExpires,
-          notes: validatedData.notes || null,
-          organisationId: user.organisationId
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          emailVerified: true,
-          notes: true,
-          createdAt: true,
-          updatedAt: true
-        }
-      })
+    const [newUser] = await db.insert(users).values({
+      name: validatedData.name || null,
+      email: validatedData.email,
+      password: placeholderPassword,
+      role: validatedData.role || 'USER',
+      emailVerified: false,
+      invitationToken,
+      invitationExpires,
+      notes: validatedData.notes || null,
+      organisationId: user.organisationId
+    }).returning()
 
-      // Send invitation email - if this fails, the entire transaction will rollback
-      await emailService.sendUserInvitation(
-        validatedData.email,
-        validatedData.name || null,
-        invitationToken,
-        organization?.name || 'Your Organization',
-        user.name || user.email
-      )
+    if (!newUser) {
+      throw new Error('Failed to invite user')
+    }
 
-      return newUser
-    })
+    await emailService.sendUserInvitation(
+      validatedData.email,
+      validatedData.name || null,
+      invitationToken,
+      organization?.name || 'Your Organization',
+      user.name || user.email
+    )
 
     return c.json({
-      user: result,
+      user: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        emailVerified: newUser.emailVerified,
+        notes: newUser.notes,
+        createdAt: newUser.createdAt,
+        updatedAt: newUser.updatedAt,
+      },
       message: 'User invited successfully. An invitation email has been sent.',
       timestamp: new Date().toISOString()
     }, 201)
@@ -214,10 +219,10 @@ users.post('/', requireManageOwnUsers, async (c) => {
 })
 
 // Update user in the current user's organization
-users.put('/:userId', requireUserManagementInOrganization, async (c) => {
+routes.put('/:userId', requireUserManagementInOrganization, async (c) => {
   try {
     const user = c.get('user')
-    const userId = parseInt(c.req.param('userId'))
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(userId)) {
       return c.json({
@@ -231,11 +236,11 @@ users.put('/:userId', requireUserManagementInOrganization, async (c) => {
     const validatedData = updateOrganizationUserSchema.parse(body)
 
     // Check if user exists in this organization
-    const existingUser = await prisma.user.findFirst({
-      where: { 
-        id: userId,
-        organisationId: user.organisationId 
-      }
+    const existingUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, user.organisationId)
+      )
     })
 
     if (!existingUser) {
@@ -248,8 +253,8 @@ users.put('/:userId', requireUserManagementInOrganization, async (c) => {
 
     // If email is being updated, check for conflicts
     if (validatedData.email && validatedData.email !== existingUser.email) {
-      const emailConflict = await prisma.user.findUnique({
-        where: { email: validatedData.email }
+      const emailConflict = await db.query.users.findFirst({
+        where: eq(users.email, validatedData.email)
       })
 
       if (emailConflict) {
@@ -261,28 +266,16 @@ users.put('/:userId', requireUserManagementInOrganization, async (c) => {
       }
     }
 
-    // Prepare update data
-    const updateData: any = { ...validatedData }
-    
-    // Hash password if provided
+    const updateData: Partial<typeof users.$inferInsert> = { updatedAt: new Date() }
+    if (validatedData.name !== undefined) updateData.name = validatedData.name
+    if (validatedData.email !== undefined) updateData.email = validatedData.email
+    if (validatedData.role !== undefined) updateData.role = validatedData.role
+    if (validatedData.notes !== undefined) updateData.notes = validatedData.notes
     if (validatedData.password) {
-      updateData.password = await bcrypt.hash(validatedData.password, 10)
+      updateData.password = await hashPassword(validatedData.password)
     }
 
-    // Update user
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true
-      }
-    })
+    const [updatedUser] = await db.update(users).set(updateData).where(eq(users.id, userId)).returning(userPublicReturning)
 
     return c.json({
       user: updatedUser,
@@ -309,10 +302,10 @@ users.put('/:userId', requireUserManagementInOrganization, async (c) => {
 })
 
 // Delete user from the current user's organization
-users.delete('/:userId', requireUserManagementInOrganization, async (c) => {
+routes.delete('/:userId', requireUserManagementInOrganization, async (c) => {
   try {
     const user = c.get('user')
-    const userId = parseInt(c.req.param('userId'))
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(userId)) {
       return c.json({
@@ -323,11 +316,11 @@ users.delete('/:userId', requireUserManagementInOrganization, async (c) => {
     }
 
     // Check if user exists in this organization
-    const existingUser = await prisma.user.findFirst({
-      where: { 
-        id: userId,
-        organisationId: user.organisationId 
-      }
+    const existingUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, user.organisationId)
+      )
     })
 
     if (!existingUser) {
@@ -347,10 +340,7 @@ users.delete('/:userId', requireUserManagementInOrganization, async (c) => {
       }, 400)
     }
 
-    // Delete user
-    await prisma.user.delete({
-      where: { id: userId }
-    })
+    await db.delete(users).where(eq(users.id, userId))
 
     return c.json({
       message: 'User deleted successfully',
@@ -367,10 +357,10 @@ users.delete('/:userId', requireUserManagementInOrganization, async (c) => {
 })
 
 // Update user role in the current user's organization
-users.patch('/:userId/role', requireUserManagementInOrganization, async (c) => {
+routes.patch('/:userId/role', requireUserManagementInOrganization, async (c) => {
   try {
     const user = c.get('user')
-    const userId = parseInt(c.req.param('userId'))
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(userId)) {
       return c.json({
@@ -392,11 +382,11 @@ users.patch('/:userId/role', requireUserManagementInOrganization, async (c) => {
     }
 
     // Check if user exists in this organization
-    const existingUser = await prisma.user.findFirst({
-      where: { 
-        id: userId,
-        organisationId: user.organisationId 
-      }
+    const existingUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, user.organisationId)
+      )
     })
 
     if (!existingUser) {
@@ -425,20 +415,10 @@ users.patch('/:userId/role', requireUserManagementInOrganization, async (c) => {
       }, 403)
     }
 
-    // Update user role
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: { role },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true
-      }
-    })
+    const [updatedUser] = await db.update(users).set({
+      role,
+      updatedAt: new Date()
+    }).where(eq(users.id, userId)).returning(userPublicReturning)
 
     return c.json({
       user: updatedUser,
@@ -456,10 +436,10 @@ users.patch('/:userId/role', requireUserManagementInOrganization, async (c) => {
 })
 
 // Resend invitation email
-users.post('/:userId/resend-invitation', requireUserManagementInOrganization, async (c) => {
+routes.post('/:userId/resend-invitation', requireUserManagementInOrganization, async (c) => {
   try {
     const user = c.get('user')
-    const userId = parseInt(c.req.param('userId'))
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(userId)) {
       return c.json({
@@ -470,12 +450,12 @@ users.post('/:userId/resend-invitation', requireUserManagementInOrganization, as
     }
 
     // Find the target user
-    const targetUser = await prisma.user.findFirst({
-      where: {
-        id: userId,
-        organisationId: user.organisationId,
-        emailVerified: false
-      }
+    const targetUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, user.organisationId),
+        eq(users.emailVerified, false)
+      )
     })
 
     if (!targetUser) {
@@ -487,35 +467,27 @@ users.post('/:userId/resend-invitation', requireUserManagementInOrganization, as
     }
 
     // Get organization name
-    const organization = await prisma.organisation.findUnique({
-      where: { id: user.organisationId },
-      select: { name: true }
+    const organization = await db.query.organisations.findFirst({
+      where: eq(organisations.id, user.organisationId),
+      columns: { name: true }
     })
 
-    // Use transaction to ensure atomicity
-    await prisma.$transaction(async (tx: any) => {
-      // Generate new invitation token and expiry
-      const newInvitationToken = generateInvitationToken()
-      const newInvitationExpires = getTokenExpiryDate(7)
+    const newInvitationToken = generateInvitationToken()
+    const newInvitationExpires = getTokenExpiryDate(7)
 
-      // Update user with new token
-      await tx.user.update({
-        where: { id: userId },
-        data: {
-          invitationToken: newInvitationToken,
-          invitationExpires: newInvitationExpires
-        }
-      })
+    await db.update(users).set({
+      invitationToken: newInvitationToken,
+      invitationExpires: newInvitationExpires,
+      updatedAt: new Date()
+    }).where(eq(users.id, userId))
 
-      // Send new invitation email - if this fails, the token update will rollback
-      await emailService.sendUserInvitation(
-        targetUser.email,
-        targetUser.name,
-        newInvitationToken,
-        organization?.name || 'Your Organization',
-        user.name || user.email
-      )
-    })
+    await emailService.sendUserInvitation(
+      targetUser.email,
+      targetUser.name,
+      newInvitationToken,
+      organization?.name || 'Your Organization',
+      user.name || user.email
+    )
 
     return c.json({
       message: 'Invitation email resent successfully',
@@ -531,4 +503,4 @@ users.post('/:userId/resend-invitation', requireUserManagementInOrganization, as
   }
 })
 
-export default users
+export default routes

@@ -16,7 +16,7 @@ else
   NPM := $(COMPOSE) exec -T api npm
 endif
 
-.PHONY: help up down logs install install-api install-client install-website dev lint typecheck migrate-prisma migrate-prisma-new seed-prisma db-bootstrap shell-api shell-client shell-website shell-db clean
+.PHONY: help up down logs install install-api install-client install-website dev lint typecheck db-push db-migrate-new seed db-bootstrap shell-api shell-client shell-website shell-db clean
 
 help:
 	@echo "re-tree — make targets"
@@ -25,10 +25,10 @@ help:
 	@echo "  install                npm ci at workspace root"
 	@echo "  dev                    start postgres + api + client + website"
 	@echo "  lint / typecheck       eslint / tsc --noEmit"
-	@echo "  migrate-prisma         Prisma migrate deploy using apps/api/.env"
-	@echo "  migrate-prisma-new MSG='...'  Prisma migrate dev --name MSG"
-	@echo "  seed-prisma            prisma db seed"
-	@echo "  db-bootstrap           generate + migrate + seed"
+	@echo "  db-push                drizzle-kit push using apps/api/.env"
+	@echo "  db-migrate-new MSG='...'  drizzle-kit generate --name MSG"
+	@echo "  seed                   seed local database"
+	@echo "  db-bootstrap           push schema + seed"
 	@echo "  shell-api / shell-client / shell-website / shell-db"
 	@echo "  clean                  drop compose volumes (DESTROYS local db)"
 
@@ -65,22 +65,22 @@ lint:
 typecheck:
 	$(NPM) run typecheck --workspaces --if-present
 
-migrate-prisma:
-	$(NPM) run migrate:deploy -w @re-tree/api
+db-push:
+	$(NPM) run db:push -w @re-tree/api
 
-migrate-prisma-new:
-	@if [ -z "$(MSG)" ]; then echo "Usage: make migrate-prisma-new MSG='description'"; exit 1; fi
+db-migrate-new:
+	@if [ -z "$(MSG)" ]; then echo "Usage: make db-migrate-new MSG='description'"; exit 1; fi
 ifeq ($(IN_CONTAINER),1)
-	npm run db:migrate -w @re-tree/api -- --name "$(MSG)"
+	npm run db:generate -w @re-tree/api -- --name "$(MSG)"
 else
-	$(COMPOSE) exec -T api sh -lc "npm run db:migrate -w @re-tree/api -- --name \"$(MSG)\""
+	$(COMPOSE) exec -T api sh -lc "npm run db:generate -w @re-tree/api -- --name \"$(MSG)\""
 endif
 
-seed-prisma:
+seed:
 	$(NPM) run db:seed -w @re-tree/api
 
 db-bootstrap:
-	$(NPM) run db:bootstrap
+	$(NPM) run db:bootstrap -w @re-tree/api
 
 shell-api:
 	docker compose exec api sh

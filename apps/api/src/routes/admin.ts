@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
-import { prisma } from '#prisma'
+import { eq, and, count } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { organisations, users, sites, nurseries, seasons } from '../db/schema.js'
 import { authenticate } from '../middleware/auth.js'
 import { 
   requireSuperAdmin,
@@ -13,10 +15,50 @@ import {
   createOrganizationUserSchema,
   updateOrganizationUserSchema 
 } from '../schemas/organization.js'
-import bcrypt from 'bcryptjs'
 import { generateInvitationToken, getTokenExpiryDate } from '../lib/tokens.js'
+import { hashPassword } from '../lib/password.js'
 
 const admin = new Hono()
+
+const userPublicColumns = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  notes: true,
+  createdAt: true,
+  updatedAt: true
+} as const
+
+const orgNameWith = {
+  organisation: {
+    columns: {
+      id: true,
+      name: true
+    }
+  }
+} as const
+
+async function organisationCounts(organisationId: number) {
+  const [userCount] = await db.select({ value: count() }).from(users).where(eq(users.organisationId, organisationId))
+  const [siteCount] = await db.select({ value: count() }).from(sites).where(eq(sites.organisationId, organisationId))
+  const [nurseryCount] = await db.select({ value: count() }).from(nurseries).where(eq(nurseries.organisationId, organisationId))
+  const [seasonCount] = await db.select({ value: count() }).from(seasons).where(eq(seasons.organisationId, organisationId))
+  return {
+    users: Number(userCount?.value ?? 0),
+    sites: Number(siteCount?.value ?? 0),
+    nurseries: Number(nurseryCount?.value ?? 0),
+    seasons: Number(seasonCount?.value ?? 0)
+  }
+}
+
+async function userWithOrganisation(userId: number) {
+  return db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: userPublicColumns,
+    with: orgNameWith
+  })
+}
 
 // Apply authentication to all routes
 admin.use('*', authenticate)
@@ -28,21 +70,13 @@ admin.use('*', authenticate)
 // Get all organizations
 admin.get('/organizations', requireManageOrganizations, async (c) => {
   try {
-    const organizations = await prisma.organisation.findMany({
-      include: {
-        _count: {
-          select: {
-            users: true,
-            sites: true,
-            nurseries: true,
-            seasons: true
-          }
-        }
-      },
-      orderBy: {
-        name: 'asc'
-      }
-    })
+    const orgs = await db.select().from(organisations).orderBy(organisations.name)
+    const organizations = await Promise.all(
+      orgs.map(async (org) => ({
+        ...org,
+        _count: await organisationCounts(org.id)
+      }))
+    )
 
     return c.json({
       organizations,
@@ -62,7 +96,7 @@ admin.get('/organizations', requireManageOrganizations, async (c) => {
 // Get organization by ID
 admin.get('/organizations/:id', requireManageOrganizations, async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     
     if (isNaN(id)) {
       return c.json({
@@ -72,22 +106,14 @@ admin.get('/organizations/:id', requireManageOrganizations, async (c) => {
       }, 400)
     }
 
-    const organization = await prisma.organisation.findUnique({
-      where: { id },
-      include: {
+    const organization = await db.query.organisations.findFirst({
+      where: eq(organisations.id, id),
+      with: {
         users: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-            notes: true,
-            createdAt: true,
-            updatedAt: true
-          }
+          columns: userPublicColumns
         },
         sites: {
-          select: {
+          columns: {
             id: true,
             name: true,
             region: true,
@@ -95,17 +121,9 @@ admin.get('/organizations/:id', requireManageOrganizations, async (c) => {
           }
         },
         nurseries: {
-          select: {
+          columns: {
             id: true,
             name: true
-          }
-        },
-        _count: {
-          select: {
-            users: true,
-            sites: true,
-            nurseries: true,
-            seasons: true
           }
         }
       }
@@ -120,7 +138,10 @@ admin.get('/organizations/:id', requireManageOrganizations, async (c) => {
     }
 
     return c.json({
-      organization,
+      organization: {
+        ...organization,
+        _count: await organisationCounts(id)
+      },
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -139,22 +160,20 @@ admin.post('/organizations', requireManageOrganizations, async (c) => {
     const body = await c.req.json()
     const validatedData = createOrganizationSchema.parse(body)
 
-    const organization = await prisma.organisation.create({
-      data: validatedData,
-      include: {
-        _count: {
-          select: {
-            users: true,
-            sites: true,
-            nurseries: true,
-            seasons: true
-          }
-        }
-      }
-    })
+    const [organization] = await db.insert(organisations).values({
+      name: validatedData.name
+    }).returning()
 
     return c.json({
-      organization,
+      organization: {
+        ...organization,
+        _count: {
+          users: 0,
+          sites: 0,
+          nurseries: 0,
+          seasons: 0
+        }
+      },
       message: 'Organization created successfully',
       timestamp: new Date().toISOString()
     }, 201)
@@ -180,7 +199,7 @@ admin.post('/organizations', requireManageOrganizations, async (c) => {
 // Update organization
 admin.put('/organizations/:id', requireManageOrganizations, async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     
     if (isNaN(id)) {
       return c.json({
@@ -194,8 +213,8 @@ admin.put('/organizations/:id', requireManageOrganizations, async (c) => {
     const validatedData = updateOrganizationSchema.parse(body)
 
     // Check if organization exists
-    const existingOrganization = await prisma.organisation.findUnique({
-      where: { id }
+    const existingOrganization = await db.query.organisations.findFirst({
+      where: eq(organisations.id, id)
     })
 
     if (!existingOrganization) {
@@ -206,29 +225,18 @@ admin.put('/organizations/:id', requireManageOrganizations, async (c) => {
       }, 404)
     }
 
-    // Prepare update data - only include defined fields  
-    const updateData: { name?: string } = {}
+    const updateData: { name?: string; updatedAt: Date } = { updatedAt: new Date() }
     if (validatedData.name !== undefined) {
       updateData.name = validatedData.name
     }
 
-    const organization = await prisma.organisation.update({
-      where: { id },
-      data: updateData,
-      include: {
-        _count: {
-          select: {
-            users: true,
-            sites: true,
-            nurseries: true,
-            seasons: true
-          }
-        }
-      }
-    })
+    const [organization] = await db.update(organisations).set(updateData).where(eq(organisations.id, id)).returning()
 
     return c.json({
-      organization,
+      organization: {
+        ...organization,
+        _count: await organisationCounts(id)
+      },
       message: 'Organization updated successfully',
       timestamp: new Date().toISOString()
     })
@@ -254,7 +262,7 @@ admin.put('/organizations/:id', requireManageOrganizations, async (c) => {
 // Delete organization
 admin.delete('/organizations/:id', requireManageOrganizations, async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     
     if (isNaN(id)) {
       return c.json({
@@ -265,18 +273,8 @@ admin.delete('/organizations/:id', requireManageOrganizations, async (c) => {
     }
 
     // Check if organization exists
-    const existingOrganization = await prisma.organisation.findUnique({
-      where: { id },
-      include: {
-        _count: {
-          select: {
-            users: true,
-            sites: true,
-            nurseries: true,
-            seasons: true
-          }
-        }
-      }
+    const existingOrganization = await db.query.organisations.findFirst({
+      where: eq(organisations.id, id)
     })
 
     if (!existingOrganization) {
@@ -287,11 +285,13 @@ admin.delete('/organizations/:id', requireManageOrganizations, async (c) => {
       }, 404)
     }
 
+    const counts = await organisationCounts(id)
+
     // Check if organization has dependencies
-    if (existingOrganization._count.users > 0 || 
-        existingOrganization._count.sites > 0 || 
-        existingOrganization._count.nurseries > 0 || 
-        existingOrganization._count.seasons > 0) {
+    if (counts.users > 0 || 
+        counts.sites > 0 || 
+        counts.nurseries > 0 || 
+        counts.seasons > 0) {
       return c.json({
         error: 'Conflict',
         message: 'Cannot delete organization with existing users, sites, nurseries, or seasons',
@@ -299,9 +299,7 @@ admin.delete('/organizations/:id', requireManageOrganizations, async (c) => {
       }, 409)
     }
 
-    await prisma.organisation.delete({
-      where: { id }
-    })
+    await db.delete(organisations).where(eq(organisations.id, id))
 
     return c.json({
       message: 'Organization deleted successfully',
@@ -324,7 +322,7 @@ admin.delete('/organizations/:id', requireManageOrganizations, async (c) => {
 // Get all users for an organization
 admin.get('/organizations/:id/users', requireManageAllUsers, async (c) => {
   try {
-    const organizationId = parseInt(c.req.param('id'))
+    const organizationId = parseInt(c.req.param('id') ?? '', 10)
     
     if (isNaN(organizationId)) {
       return c.json({
@@ -335,9 +333,9 @@ admin.get('/organizations/:id/users', requireManageAllUsers, async (c) => {
     }
 
     // Check if organization exists
-    const organization = await prisma.organisation.findUnique({
-      where: { id: organizationId },
-      select: { id: true, name: true }
+    const organization = await db.query.organisations.findFirst({
+      where: eq(organisations.id, organizationId),
+      columns: { id: true, name: true }
     })
 
     if (!organization) {
@@ -348,26 +346,16 @@ admin.get('/organizations/:id/users', requireManageAllUsers, async (c) => {
       }, 404)
     }
 
-    const users = await prisma.user.findMany({
-      where: { organisationId: organizationId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true
-      },
-      orderBy: {
-        email: 'asc'
-      }
+    const userList = await db.query.users.findMany({
+      where: eq(users.organisationId, organizationId),
+      columns: userPublicColumns,
+      orderBy: users.email
     })
 
     return c.json({
-      users,
+      users: userList,
       organization,
-      count: users.length,
+      count: userList.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -383,8 +371,8 @@ admin.get('/organizations/:id/users', requireManageAllUsers, async (c) => {
 // Get user by ID within organization
 admin.get('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c) => {
   try {
-    const organizationId = parseInt(c.req.param('orgId'))
-    const userId = parseInt(c.req.param('userId'))
+    const organizationId = parseInt(c.req.param('orgId') ?? '', 10)
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(organizationId) || isNaN(userId)) {
       return c.json({
@@ -394,26 +382,13 @@ admin.get('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c
       }, 400)
     }
 
-    const user = await prisma.user.findFirst({
-      where: { 
-        id: userId,
-        organisationId: organizationId 
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true,
-        organisation: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
-      }
+    const user = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, organizationId)
+      ),
+      columns: userPublicColumns,
+      with: orgNameWith
     })
 
     if (!user) {
@@ -441,7 +416,7 @@ admin.get('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c
 // Create user in organization
 admin.post('/organizations/:id/users', requireManageAllUsers, async (c) => {
   try {
-    const organizationId = parseInt(c.req.param('id'))
+    const organizationId = parseInt(c.req.param('id') ?? '', 10)
     
     if (isNaN(organizationId)) {
       return c.json({
@@ -452,8 +427,8 @@ admin.post('/organizations/:id/users', requireManageAllUsers, async (c) => {
     }
 
     // Check if organization exists
-    const organization = await prisma.organisation.findUnique({
-      where: { id: organizationId }
+    const organization = await db.query.organisations.findFirst({
+      where: eq(organisations.id, organizationId)
     })
 
     if (!organization) {
@@ -468,8 +443,8 @@ admin.post('/organizations/:id/users', requireManageAllUsers, async (c) => {
     const validatedData = createOrganizationUserSchema.parse(body)
 
     // Check if user with this email already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email: validatedData.email }
+    const existingUser = await db.query.users.findFirst({
+      where: eq(users.email, validatedData.email)
     })
 
     if (existingUser) {
@@ -485,36 +460,25 @@ admin.post('/organizations/:id/users', requireManageAllUsers, async (c) => {
     const invitationExpires = getTokenExpiryDate(7) // 7 days
 
     // Create placeholder password (will be changed when user accepts invitation)
-    const placeholderPassword = await bcrypt.hash('placeholder', 10)
+    const placeholderPassword = await hashPassword('placeholder')
 
-    const user = await prisma.user.create({
-      data: {
-        email: validatedData.email,
-        password: placeholderPassword,
-        name: validatedData.name || null,
-        notes: validatedData.notes || null,
-        organisationId: organizationId,
-        role: validatedData.role || 'USER',
-        emailVerified: false,
-        invitationToken,
-        invitationExpires
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true,
-        organisation: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
-      }
-    })
+    const [inserted] = await db.insert(users).values({
+      email: validatedData.email,
+      password: placeholderPassword,
+      name: validatedData.name || null,
+      notes: validatedData.notes || null,
+      organisationId: organizationId,
+      role: validatedData.role || 'USER',
+      emailVerified: false,
+      invitationToken,
+      invitationExpires
+    }).returning()
+
+    if (!inserted) {
+      throw new Error('Failed to create user')
+    }
+
+    const user = await userWithOrganisation(inserted.id)
 
     return c.json({
       user,
@@ -543,8 +507,8 @@ admin.post('/organizations/:id/users', requireManageAllUsers, async (c) => {
 // Update user in organization
 admin.put('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c) => {
   try {
-    const organizationId = parseInt(c.req.param('orgId'))
-    const userId = parseInt(c.req.param('userId'))
+    const organizationId = parseInt(c.req.param('orgId') ?? '', 10)
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(organizationId) || isNaN(userId)) {
       return c.json({
@@ -558,11 +522,11 @@ admin.put('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c
     const validatedData = updateOrganizationUserSchema.parse(body)
 
     // Check if user exists in this organization
-    const existingUser = await prisma.user.findFirst({
-      where: { 
-        id: userId,
-        organisationId: organizationId 
-      }
+    const existingUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, organizationId)
+      )
     })
 
     if (!existingUser) {
@@ -575,8 +539,8 @@ admin.put('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c
 
     // If email is being updated, check for conflicts
     if (validatedData.email && validatedData.email !== existingUser.email) {
-      const emailConflict = await prisma.user.findUnique({
-        where: { email: validatedData.email }
+      const emailConflict = await db.query.users.findFirst({
+        where: eq(users.email, validatedData.email)
       })
 
       if (emailConflict) {
@@ -588,33 +552,18 @@ admin.put('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c
       }
     }
 
-    // Prepare update data
-    const updateData: any = { ...validatedData }
-    
-    // Hash password if provided
+    const updateData: Partial<typeof users.$inferInsert> = { updatedAt: new Date() }
+    if (validatedData.name !== undefined) updateData.name = validatedData.name
+    if (validatedData.email !== undefined) updateData.email = validatedData.email
+    if (validatedData.role !== undefined) updateData.role = validatedData.role
+    if (validatedData.notes !== undefined) updateData.notes = validatedData.notes
     if (validatedData.password) {
-      updateData.password = await bcrypt.hash(validatedData.password, 10)
+      updateData.password = await hashPassword(validatedData.password)
     }
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true,
-        organisation: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
-      }
-    })
+    await db.update(users).set(updateData).where(eq(users.id, userId))
+
+    const user = await userWithOrganisation(userId)
 
     return c.json({
       user,
@@ -643,8 +592,8 @@ admin.put('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c
 // Delete user from organization
 admin.delete('/organizations/:orgId/users/:userId', requireManageAllUsers, async (c) => {
   try {
-    const organizationId = parseInt(c.req.param('orgId'))
-    const userId = parseInt(c.req.param('userId'))
+    const organizationId = parseInt(c.req.param('orgId') ?? '', 10)
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(organizationId) || isNaN(userId)) {
       return c.json({
@@ -655,11 +604,11 @@ admin.delete('/organizations/:orgId/users/:userId', requireManageAllUsers, async
     }
 
     // Check if user exists in this organization
-    const existingUser = await prisma.user.findFirst({
-      where: { 
-        id: userId,
-        organisationId: organizationId 
-      }
+    const existingUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, organizationId)
+      )
     })
 
     if (!existingUser) {
@@ -680,9 +629,7 @@ admin.delete('/organizations/:orgId/users/:userId', requireManageAllUsers, async
       }, 403)
     }
 
-    await prisma.user.delete({
-      where: { id: userId }
-    })
+    await db.delete(users).where(eq(users.id, userId))
 
     return c.json({
       message: 'User deleted successfully',
@@ -705,8 +652,8 @@ admin.delete('/organizations/:orgId/users/:userId', requireManageAllUsers, async
 // Update user role
 admin.patch('/organizations/:orgId/users/:userId/role', requireManageAllUsers, async (c) => {
   try {
-    const organizationId = parseInt(c.req.param('orgId'))
-    const userId = parseInt(c.req.param('userId'))
+    const organizationId = parseInt(c.req.param('orgId') ?? '', 10)
+    const userId = parseInt(c.req.param('userId') ?? '', 10)
     
     if (isNaN(organizationId) || isNaN(userId)) {
       return c.json({
@@ -728,11 +675,11 @@ admin.patch('/organizations/:orgId/users/:userId/role', requireManageAllUsers, a
     }
 
     // Check if user exists in this organization
-    const existingUser = await prisma.user.findFirst({
-      where: { 
-        id: userId,
-        organisationId: organizationId 
-      }
+    const existingUser = await db.query.users.findFirst({
+      where: and(
+        eq(users.id, userId),
+        eq(users.organisationId, organizationId)
+      )
     })
 
     if (!existingUser) {
@@ -762,25 +709,12 @@ admin.patch('/organizations/:orgId/users/:userId/role', requireManageAllUsers, a
       }, 403)
     }
 
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: { role },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        notes: true,
-        createdAt: true,
-        updatedAt: true,
-        organisation: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
-      }
-    })
+    await db.update(users).set({
+      role,
+      updatedAt: new Date()
+    }).where(eq(users.id, userId))
+
+    const user = await userWithOrganisation(userId)
 
     return c.json({
       user,

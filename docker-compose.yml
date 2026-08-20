@@ -3,7 +3,7 @@
 # Architecture:
 #   - Default `docker compose up`: `postgres`, `api` (Node), `client`, `website`.
 #   - npm workspaces: install at repo root; apps share one node_modules volume.
-#   - Node API schema: `make migrate-prisma` (Prisma Migrate) from the repo root.
+#   - Node API schema: `make db-push` (Drizzle) from the repo root.
 #   - Services with build: + image: re-tree-*-dev use pull_policy: never so
 #     Compose does not try to pull those tags from Docker Hub (they are local only).
 #
@@ -52,7 +52,6 @@ services:
     environment:
       PORT: "5000"
       DATABASE_URL: "postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/re_tree_db"
-      DIRECT_URL: "postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/re_tree_db"
       FRONTEND_URL: "http://localhost:3000"
       CHOKIDAR_USEPOLLING: "true"
     ports:

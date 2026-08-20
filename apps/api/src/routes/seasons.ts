@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { prisma } from '#prisma'
+import { eq, and, desc, ne } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { seasons, sites } from '../db/schema.js'
 import {
   CreateSeasonSchema,
   UpdateSeasonSchema,
@@ -8,31 +10,27 @@ import {
 } from '../schemas/season.js'
 import { authenticate } from '../middleware/auth.js'
 
-const seasons = new Hono()
+const routes = new Hono()
 
 // Apply authentication middleware to all season routes
-seasons.use('*', authenticate)
+routes.use('*', authenticate)
 
 // Get all seasons for the authenticated user's organization
-seasons.get('/', async (c) => {
+routes.get('/', async (c) => {
   try {
     const user = c.get('user')
     
-    const seasons = await prisma.season.findMany({
-      where: {
-        organisationId: user.organisationId
-      },
-      include: {
+    const seasonList = await db.query.seasons.findMany({
+      where: eq(seasons.organisationId, user.organisationId),
+      with: {
         site: true
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      orderBy: desc(seasons.createdAt)
     })
 
     return c.json({
-      seasons,
-      count: seasons.length,
+      seasons: seasonList,
+      count: seasonList.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -45,17 +43,17 @@ seasons.get('/', async (c) => {
 })
 
 // Get season by ID (organization-scoped)
-seasons.get('/:id', async (c) => {
+routes.get('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
     
-    const season = await prisma.season.findFirst({
-      where: { 
-        id,
-        organisationId: user.organisationId
-      },
-      include: {
+    const season = await db.query.seasons.findFirst({
+      where: and(
+        eq(seasons.id, id),
+        eq(seasons.organisationId, user.organisationId)
+      ),
+      with: {
         site: true
       }
     })
@@ -81,17 +79,17 @@ seasons.get('/:id', async (c) => {
 })
 
 // Get seasons by site ID (organization-scoped)
-seasons.get('/site/:siteId', async (c) => {
+routes.get('/site/:siteId', async (c) => {
   try {
-    const siteId = parseInt(c.req.param('siteId'))
+    const siteId = parseInt(c.req.param('siteId') ?? '', 10)
     const user = c.get('user')
     
     // Verify that site belongs to the user's organization
-    const site = await prisma.site.findFirst({
-      where: { 
-        id: siteId,
-        organisationId: user.organisationId
-      }
+    const site = await db.query.sites.findFirst({
+      where: and(
+        eq(sites.id, siteId),
+        eq(sites.organisationId, user.organisationId)
+      )
     })
     
     if (!site) {
@@ -101,22 +99,20 @@ seasons.get('/site/:siteId', async (c) => {
       }, 404)
     }
     
-    const seasons = await prisma.season.findMany({
-      where: {
-        siteId,
-        organisationId: user.organisationId
-      },
-      include: {
+    const seasonList = await db.query.seasons.findMany({
+      where: and(
+        eq(seasons.siteId, siteId),
+        eq(seasons.organisationId, user.organisationId)
+      ),
+      with: {
         site: true
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      orderBy: desc(seasons.createdAt)
     })
 
     return c.json({
-      seasons,
-      count: seasons.length,
+      seasons: seasonList,
+      count: seasonList.length,
       site: {
         id: site.id,
         name: site.name
@@ -133,17 +129,17 @@ seasons.get('/site/:siteId', async (c) => {
 })
 
 // Create new season
-seasons.post('/', zValidator('json', CreateSeasonSchema), async (c) => {
+routes.post('/', zValidator('json', CreateSeasonSchema), async (c) => {
   try {
     const body = c.req.valid('json')
     const user = c.get('user')
     
     // Verify that site belongs to the user's organization
-    const site = await prisma.site.findFirst({
-      where: { 
-        id: body.siteId,
-        organisationId: user.organisationId
-      }
+    const site = await db.query.sites.findFirst({
+      where: and(
+        eq(sites.id, body.siteId),
+        eq(sites.organisationId, user.organisationId)
+      )
     })
     
     if (!site) {
@@ -154,13 +150,13 @@ seasons.post('/', zValidator('json', CreateSeasonSchema), async (c) => {
     }
     
     // Check if a season already exists for this site with the same year and season
-    const existingSeason = await prisma.season.findFirst({
-      where: {
-        siteId: body.siteId,
-        organisationId: user.organisationId,
-        year: body.year,
-        season: body.season
-      }
+    const existingSeason = await db.query.seasons.findFirst({
+      where: and(
+        eq(seasons.siteId, body.siteId),
+        eq(seasons.organisationId, user.organisationId),
+        eq(seasons.year, body.year),
+        eq(seasons.season, body.season)
+      )
     })
     
     if (existingSeason) {
@@ -170,15 +166,21 @@ seasons.post('/', zValidator('json', CreateSeasonSchema), async (c) => {
       }, 409)
     }
     
-    const season = await prisma.season.create({
-      data: {
-        siteId: body.siteId,
-        organisationId: user.organisationId,
-        year: body.year,
-        season: body.season,
-        notes: body.notes || null
-      },
-      include: {
+    const [inserted] = await db.insert(seasons).values({
+      siteId: body.siteId,
+      organisationId: user.organisationId,
+      year: body.year,
+      season: body.season,
+      notes: body.notes || null
+    }).returning()
+
+    if (!inserted) {
+      throw new Error('Failed to create season')
+    }
+
+    const season = await db.query.seasons.findFirst({
+      where: eq(seasons.id, inserted.id),
+      with: {
         site: true
       }
     })
@@ -198,17 +200,17 @@ seasons.post('/', zValidator('json', CreateSeasonSchema), async (c) => {
 })
 
 // Create seasons for all organization sites
-seasons.post('/bulk', zValidator('json', BulkCreateSeasonSchema), async (c) => {
+routes.post('/bulk', zValidator('json', BulkCreateSeasonSchema), async (c) => {
   try {
     const body = c.req.valid('json')
     const user = c.get('user')
     
     // Verify that the target site belongs to the user's organization
-    const targetSite = await prisma.site.findFirst({
-      where: { 
-        id: body.siteId,
-        organisationId: user.organisationId
-      }
+    const targetSite = await db.query.sites.findFirst({
+      where: and(
+        eq(sites.id, body.siteId),
+        eq(sites.organisationId, user.organisationId)
+      )
     })
     
     if (!targetSite) {
@@ -219,28 +221,21 @@ seasons.post('/bulk', zValidator('json', BulkCreateSeasonSchema), async (c) => {
     }
     
     // Get all sites in the organization
-    const allSites = await prisma.site.findMany({
-      where: {
-        organisationId: user.organisationId
-      }
-    })
+    const allSites = await db.select().from(sites).where(eq(sites.organisationId, user.organisationId))
     
     // Get existing seasons for the specified year and season
-    const existingSeasons = await prisma.season.findMany({
-      where: {
-        organisationId: user.organisationId,
-        year: body.year,
-        season: body.season
-      },
-      select: {
-        siteId: true
-      }
-    })
+    const existingSeasons = await db.select({ siteId: seasons.siteId }).from(seasons).where(
+      and(
+        eq(seasons.organisationId, user.organisationId),
+        eq(seasons.year, body.year),
+        eq(seasons.season, body.season)
+      )
+    )
     
-    const sitesWithExistingSeasons = new Set(existingSeasons.map((s: any) => s.siteId))
+    const sitesWithExistingSeasons = new Set(existingSeasons.map((s) => s.siteId))
     
     // Filter sites that don't already have this season
-    const sitesToAddSeason = allSites.filter((site: any) => !sitesWithExistingSeasons.has(site.id))
+    const sitesToAddSeason = allSites.filter((site) => !sitesWithExistingSeasons.has(site.id))
     
     if (sitesToAddSeason.length === 0) {
       return c.json({
@@ -252,23 +247,21 @@ seasons.post('/bulk', zValidator('json', BulkCreateSeasonSchema), async (c) => {
       })
     }
     
-    // Create seasons for all eligible sites
-    const createdSeasons = await Promise.all(
-      sitesToAddSeason.map(site => 
-        prisma.season.create({
-          data: {
-            siteId: site.id,
-            organisationId: user.organisationId,
-            year: body.year,
-            season: body.season,
-            notes: body.notes || null
-          },
-          include: {
-            site: true
-          }
-        })
-      )
-    )
+    const inserted = await db.insert(seasons).values(
+      sitesToAddSeason.map(site => ({
+        siteId: site.id,
+        organisationId: user.organisationId,
+        year: body.year,
+        season: body.season,
+        notes: body.notes || null
+      }))
+    ).returning()
+
+    const siteById = new Map(sitesToAddSeason.map(site => [site.id, site]))
+    const createdSeasons = inserted.map(season => ({
+      ...season,
+      site: siteById.get(season.siteId)
+    }))
     
     return c.json({
       seasons: createdSeasons,
@@ -287,18 +280,18 @@ seasons.post('/bulk', zValidator('json', BulkCreateSeasonSchema), async (c) => {
 })
 
 // Update season
-seasons.put('/:id', zValidator('json', UpdateSeasonSchema), async (c) => {
+routes.put('/:id', zValidator('json', UpdateSeasonSchema), async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const body = c.req.valid('json')
     const user = c.get('user')
 
     // Check if season exists and belongs to user's organization
-    const existingSeason = await prisma.season.findFirst({
-      where: { 
-        id,
-        organisationId: user.organisationId
-      }
+    const existingSeason = await db.query.seasons.findFirst({
+      where: and(
+        eq(seasons.id, id),
+        eq(seasons.organisationId, user.organisationId)
+      )
     })
 
     if (!existingSeason) {
@@ -310,11 +303,11 @@ seasons.put('/:id', zValidator('json', UpdateSeasonSchema), async (c) => {
 
     // If updating site, verify it belongs to the organization
     if (body.siteId) {
-      const site = await prisma.site.findFirst({
-        where: { 
-          id: body.siteId,
-          organisationId: user.organisationId
-        }
+      const site = await db.query.sites.findFirst({
+        where: and(
+          eq(sites.id, body.siteId),
+          eq(sites.organisationId, user.organisationId)
+        )
       })
       
       if (!site) {
@@ -331,14 +324,14 @@ seasons.put('/:id', zValidator('json', UpdateSeasonSchema), async (c) => {
       const targetYear = body.year !== undefined ? body.year : existingSeason.year
       const targetSeason = body.season !== undefined ? body.season : existingSeason.season
       
-      const duplicateSeason = await prisma.season.findFirst({
-        where: {
-          siteId: targetSiteId,
-          organisationId: user.organisationId,
-          year: targetYear,
-          season: targetSeason,
-          id: { not: id } // Exclude the current season being updated
-        }
+      const duplicateSeason = await db.query.seasons.findFirst({
+        where: and(
+          eq(seasons.siteId, targetSiteId),
+          eq(seasons.organisationId, user.organisationId),
+          eq(seasons.year, targetYear),
+          eq(seasons.season, targetSeason),
+          ne(seasons.id, id)
+        )
       })
       
       if (duplicateSeason) {
@@ -349,15 +342,17 @@ seasons.put('/:id', zValidator('json', UpdateSeasonSchema), async (c) => {
       }
     }
 
-    const season = await prisma.season.update({
-      where: { id },
-      data: {
-        ...(body.siteId !== undefined && { siteId: body.siteId }),
-        ...(body.year !== undefined && { year: body.year }),
-        ...(body.season !== undefined && { season: body.season }),
-        ...(body.notes !== undefined && { notes: body.notes || null })
-      },
-      include: {
+    await db.update(seasons).set({
+      ...(body.siteId !== undefined && { siteId: body.siteId }),
+      ...(body.year !== undefined && { year: body.year }),
+      ...(body.season !== undefined && { season: body.season }),
+      ...(body.notes !== undefined && { notes: body.notes || null }),
+      updatedAt: new Date()
+    }).where(eq(seasons.id, id))
+
+    const season = await db.query.seasons.findFirst({
+      where: eq(seasons.id, id),
+      with: {
         site: true
       }
     })
@@ -377,17 +372,17 @@ seasons.put('/:id', zValidator('json', UpdateSeasonSchema), async (c) => {
 })
 
 // Delete season
-seasons.delete('/:id', async (c) => {
+routes.delete('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
 
     // Check if season exists and belongs to user's organization
-    const existingSeason = await prisma.season.findFirst({
-      where: { 
-        id,
-        organisationId: user.organisationId
-      }
+    const existingSeason = await db.query.seasons.findFirst({
+      where: and(
+        eq(seasons.id, id),
+        eq(seasons.organisationId, user.organisationId)
+      )
     })
 
     if (!existingSeason) {
@@ -397,9 +392,7 @@ seasons.delete('/:id', async (c) => {
       }, 404)
     }
 
-    await prisma.season.delete({
-      where: { id }
-    })
+    await db.delete(seasons).where(eq(seasons.id, id))
 
     return c.json({
       message: 'Season deleted successfully',
@@ -414,4 +407,4 @@ seasons.delete('/:id', async (c) => {
   }
 })
 
-export default seasons 
+export default routes
