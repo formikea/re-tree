@@ -1,7 +1,6 @@
-import { PrismaClient } from '@prisma/client'
+import 'dotenv/config'
 import bcrypt from 'bcryptjs'
-
-const prisma = new PrismaClient()
+import { prisma } from '../src/lib/prisma.js'
 
 async function main() {
   console.log('🌱 Starting database seeding...')
@@ -329,5 +328,5 @@ main()
     process.exit(1)
   })
   .finally(async () => {
-    await prisma.$disconnect()
+    await prisma.$disconnect?.()
   }) 
