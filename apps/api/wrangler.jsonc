@@ -6,6 +6,9 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"alias": {
+		"#prisma": "./src/lib/prisma.worker.ts"
+	},
 	"workers_dev": true,
 	"preview_urls": true,
 	"vars": {

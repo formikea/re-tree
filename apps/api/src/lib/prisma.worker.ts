@@ -1,4 +1,4 @@
-import { PrismaClient } from '../../prisma/generated/client/index.js'
+import { PrismaClient } from '../../prisma/generated/client/wasm.js'
 import { createPrisma } from './prisma-factory.js'
 
 export const { prisma, getPrisma } = createPrisma(

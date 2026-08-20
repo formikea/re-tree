@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { prisma } from '../lib/prisma.js'
+import { prisma } from '#prisma'
 import { authenticate } from '../middleware/auth.js'
 import bcrypt from 'bcryptjs'
 import { emailService } from '../lib/email.js'

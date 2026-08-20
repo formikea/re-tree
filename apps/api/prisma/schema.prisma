@@ -4,20 +4,21 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Species {
-  id                Int      @id @default(autoincrement())
-  botanicalName     String?
-  commonName        String?
-  maoriName         String?
-  threatenedSpecies Boolean  @default(false)
-  treesThatCount    Boolean  @default(false)
-  notes             String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  batches           Batch[]
+  id                  Int                   @id @default(autoincrement())
+  botanicalName       String?
+  commonName          String?
+  maoriName           String?
+  threatenedSpecies   Boolean               @default(false)
+  treesThatCount      Boolean               @default(false)
+  notes               String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  batches             Batch[]
   organisationSpecies OrganisationSpecies[]
 
   @@map("species")
@@ -42,20 +43,20 @@ model Site {
 }
 
 model Batch {
-  id         Int             @id @default(autoincrement())
-  speciesId  Int
-  quantity   Int?
-  notes      String?
-  createdAt  DateTime        @default(now())
-  updatedAt  DateTime        @updatedAt
-  nurseryId  Int
-  origin     String?
-  stage      BatchStageEnum?
-  isOrder    Boolean         @default(false)
+  id          Int             @id @default(autoincrement())
+  speciesId   Int
+  quantity    Int?
+  notes       String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  nurseryId   Int
+  origin      String?
+  stage       BatchStageEnum?
+  isOrder     Boolean         @default(false)
   completedAt DateTime?
-  allotments Allotment[]
-  nursery    Nursery         @relation(fields: [nurseryId], references: [id], onDelete: Cascade)
-  species    Species         @relation(fields: [speciesId], references: [id], onDelete: Cascade)
+  allotments  Allotment[]
+  nursery     Nursery         @relation(fields: [nurseryId], references: [id], onDelete: Cascade)
+  species     Species         @relation(fields: [speciesId], references: [id], onDelete: Cascade)
 
   @@map("batches")
 }
@@ -91,33 +92,33 @@ model Allotment {
 }
 
 model User {
-  id             Int          @id @default(autoincrement())
-  name           String?
-  email          String       @unique
-  password       String
-  organisationId Int
-  role           Role         @default(USER)
-  tokenVersion   Int          @default(0)
-  emailVerified  Boolean      @default(false)
-  invitationToken String?     @unique
+  id                Int          @id @default(autoincrement())
+  name              String?
+  email             String       @unique
+  password          String
+  organisationId    Int
+  role              Role         @default(USER)
+  tokenVersion      Int          @default(0)
+  emailVerified     Boolean      @default(false)
+  invitationToken   String?      @unique
   invitationExpires DateTime?
-  notes          String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  notes             String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  organisation      Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
 
   @@map("users")
 }
 
 model Organisation {
-  id        Int       @id @default(autoincrement())
-  name      String    @unique
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  nurseries Nursery[]
-  seasons   Season[]
-  sites     Site[]
-  users     User[]
+  id                  Int                   @id @default(autoincrement())
+  name                String                @unique
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  nurseries           Nursery[]
+  seasons             Season[]
+  sites               Site[]
+  users               User[]
   organisationSpecies OrganisationSpecies[]
 
   @@map("organisations")

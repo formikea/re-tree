@@ -1,6 +1,6 @@
 import { Context, Next } from 'hono'
 import jwt from 'jsonwebtoken'
-import { prisma } from '../lib/prisma.js'
+import { prisma } from '#prisma'
 
 // JWT secret - should match the one in auth.ts
 const jwtSecret = () => process.env.JWT_SECRET || 'your-secret-key-change-in-production'
