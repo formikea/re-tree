@@ -1,15 +1,29 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "re-tree-api",
-  "main": "src/worker.ts",
-  "compatibility_date": "2026-08-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": true,
-  "preview_urls": true,
-  "vars": {
-    "NODE_ENV": "production",
-    "FRONTEND_URL": "https://app.re-tree.app",
-    "SMTP_FROM": "hello@re-tree.app",
-    "SMTP_FROM_NAME": "Re-Tree"
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "re-tree-api",
+	"main": "src/worker.ts",
+	"compatibility_date": "2026-08-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": true,
+	"preview_urls": true,
+	"vars": {
+		"NODE_ENV": "production",
+		"FRONTEND_URL": "https://app.re-tree.app",
+		"SMTP_FROM": "hello@re-tree.app",
+		"SMTP_FROM_NAME": "Re-Tree"
+	},
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "<your-hyperdrive-id>"
+		}
+	],
+	"routes": [
+		{
+			"pattern": "api.re-tree.app",
+			"custom_domain": true
+		}
+	]
 }
