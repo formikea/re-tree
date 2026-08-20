@@ -26,8 +26,8 @@
     "@hono/swagger-ui": "^0.5.2",
     "@hono/zod-openapi": "^1.0.2",
     "@hono/zod-validator": "^0.7.3",
-    "@prisma/adapter-pg": "^6.0.0",
-    "@prisma/client": "^7.0.0",
+    "@prisma/adapter-pg": "6.19.0",
+    "@prisma/client": "6.19.0",
     "bcryptjs": "^3.0.2",
     "hono": "^4.0.0",
     "jsonwebtoken": "^9.0.2",
@@ -43,13 +43,16 @@
     "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.15.5",
     "dotenv": "^16.4.7",
-    "prisma": "^7.0.0",
+    "prisma": "6.19.0",
     "tsx": "^4.6.0",
     "typescript": "^5.3.0",
     "wrangler": "^4.28.0"
   },
   "engines": {
     "node": ">=20.19.0"
+  },
+  "imports": {
+    "#prisma": "./src/lib/prisma.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

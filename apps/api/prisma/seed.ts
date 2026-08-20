@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import bcrypt from 'bcryptjs'
-import { prisma } from '../src/lib/prisma.js'
+import { prisma } from '#prisma'
 
 async function main() {
   console.log('🌱 Starting database seeding...')

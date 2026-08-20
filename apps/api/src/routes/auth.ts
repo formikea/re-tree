@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { prisma } from '../lib/prisma.js'
+import { prisma } from '#prisma'
 import { loginSchema, loginResponseSchema, refreshTokenSchema, resetPasswordSchema } from '../schemas/auth.js'
 
 const auth = new Hono()

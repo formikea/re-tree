@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { prisma } from '../lib/prisma.js'
+import { prisma } from '#prisma'
 import {
   CreateAllotmentSchema,
   UpdateAllotmentSchema,
