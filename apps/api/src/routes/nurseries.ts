@@ -1,60 +1,52 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { prisma } from '#prisma'
+import { eq, and, desc, count } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { nurseries, batches } from '../db/schema.js'
 import {
   CreateNurserySchema,
   UpdateNurserySchema
 } from '../schemas/nursery.js'
 import { authenticate } from '../middleware/auth.js'
 
-const nurseries = new Hono()
+const routes = new Hono()
 
-// Apply authentication middleware to all nursery routes
-nurseries.use('*', authenticate)
+routes.use('*', authenticate)
 
-// Get all nurseries for the authenticated user's organization
-nurseries.get('/', async (c) => {
+routes.get('/', async (c) => {
   try {
     const user = c.get('user')
-    
-    const nurseries = await prisma.nursery.findMany({
-      where: {
-        organisationId: user.organisationId
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
+
+    const nurseryRows = await db.query.nurseries.findMany({
+      where: eq(nurseries.organisationId, user.organisationId),
+      orderBy: desc(nurseries.createdAt),
     })
 
     return c.json({
-      nurseries,
-      count: nurseries.length,
+      nurseries: nurseryRows,
+      count: nurseryRows.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
     console.error('Error fetching nurseries:', error)
-    return c.json({ 
+    return c.json({
       error: 'Failed to fetch nurseries',
       timestamp: new Date().toISOString()
     }, 500)
   }
 })
 
-// Get nursery by ID (organization-scoped)
-nurseries.get('/:id', async (c) => {
+routes.get('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
-    
-    const nursery = await prisma.nursery.findFirst({
-      where: { 
-        id,
-        organisationId: user.organisationId
-      }
+
+    const nursery = await db.query.nurseries.findFirst({
+      where: and(eq(nurseries.id, id), eq(nurseries.organisationId, user.organisationId)),
     })
 
     if (!nursery) {
-      return c.json({ 
+      return c.json({
         error: 'Nursery not found',
         timestamp: new Date().toISOString()
       }, 404)
@@ -66,25 +58,22 @@ nurseries.get('/:id', async (c) => {
     })
   } catch (error) {
     console.error('Error fetching nursery:', error)
-    return c.json({ 
+    return c.json({
       error: 'Failed to fetch nursery',
       timestamp: new Date().toISOString()
     }, 500)
   }
 })
 
-// Create new nursery
-nurseries.post('/', zValidator('json', CreateNurserySchema), async (c) => {
+routes.post('/', zValidator('json', CreateNurserySchema), async (c) => {
   try {
     const body = c.req.valid('json')
     const user = c.get('user')
-    
-    const nursery = await prisma.nursery.create({
-      data: {
-        name: body.name,
-        organisationId: user.organisationId
-      }
-    })
+
+    const [nursery] = await db.insert(nurseries).values({
+      name: body.name,
+      organisationId: user.organisationId,
+    }).returning()
 
     return c.json({
       nursery,
@@ -93,44 +82,36 @@ nurseries.post('/', zValidator('json', CreateNurserySchema), async (c) => {
     }, 201)
   } catch (error) {
     console.error('Error creating nursery:', error)
-    return c.json({ 
+    return c.json({
       error: 'Failed to create nursery',
       timestamp: new Date().toISOString()
     }, 500)
   }
 })
 
-// Update nursery
-nurseries.put('/:id', zValidator('json', UpdateNurserySchema), async (c) => {
+routes.put('/:id', zValidator('json', UpdateNurserySchema), async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const body = c.req.valid('json')
     const user = c.get('user')
-    
-    // Check if nursery exists and belongs to user's organization
-    const existingNursery = await prisma.nursery.findFirst({
-      where: { 
-        id,
-        organisationId: user.organisationId
-      }
+
+    const existingNursery = await db.query.nurseries.findFirst({
+      where: and(eq(nurseries.id, id), eq(nurseries.organisationId, user.organisationId)),
     })
 
     if (!existingNursery) {
-      return c.json({ 
+      return c.json({
         error: 'Nursery not found',
         timestamp: new Date().toISOString()
       }, 404)
     }
 
-    const updateData: any = {}
+    const updateData: Partial<typeof nurseries.$inferInsert> = { updatedAt: new Date() }
     if (body.name !== undefined) {
       updateData.name = body.name
     }
 
-    const nursery = await prisma.nursery.update({
-      where: { id },
-      data: updateData
-    })
+    const [nursery] = await db.update(nurseries).set(updateData).where(eq(nurseries.id, id)).returning()
 
     return c.json({
       nursery,
@@ -139,49 +120,40 @@ nurseries.put('/:id', zValidator('json', UpdateNurserySchema), async (c) => {
     })
   } catch (error) {
     console.error('Error updating nursery:', error)
-    return c.json({ 
+    return c.json({
       error: 'Failed to update nursery',
       timestamp: new Date().toISOString()
     }, 500)
   }
 })
 
-// Delete nursery
-nurseries.delete('/:id', async (c) => {
+routes.delete('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
-    
-    // Check if nursery exists and belongs to user's organization
-    const existingNursery = await prisma.nursery.findFirst({
-      where: { 
-        id,
-        organisationId: user.organisationId
-      }
+
+    const existingNursery = await db.query.nurseries.findFirst({
+      where: and(eq(nurseries.id, id), eq(nurseries.organisationId, user.organisationId)),
     })
 
     if (!existingNursery) {
-      return c.json({ 
+      return c.json({
         error: 'Nursery not found',
         timestamp: new Date().toISOString()
       }, 404)
     }
 
-    // Check if nursery has any batches
-    const batchesCount = await prisma.batch.count({
-      where: { nurseryId: id }
-    })
+    const [batchRow] = await db.select({ value: count() }).from(batches).where(eq(batches.nurseryId, id))
+    const batchesCount = Number(batchRow?.value ?? 0)
 
     if (batchesCount > 0) {
-      return c.json({ 
+      return c.json({
         error: 'Cannot delete nursery with existing batches',
         timestamp: new Date().toISOString()
       }, 400)
     }
 
-    await prisma.nursery.delete({
-      where: { id }
-    })
+    await db.delete(nurseries).where(eq(nurseries.id, id))
 
     return c.json({
       message: 'Nursery deleted successfully',
@@ -189,11 +161,11 @@ nurseries.delete('/:id', async (c) => {
     })
   } catch (error) {
     console.error('Error deleting nursery:', error)
-    return c.json({ 
+    return c.json({
       error: 'Failed to delete nursery',
       timestamp: new Date().toISOString()
     }, 500)
   }
 })
 
-export default nurseries 
+export default routes

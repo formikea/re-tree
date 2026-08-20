@@ -1,6 +1,0 @@
-import { PrismaClient } from '../../prisma/generated/client/index.js'
-import { createPrisma } from './prisma-factory.js'
-
-export const { prisma, getPrisma } = createPrisma(
-  PrismaClient as ConstructorParameters<typeof createPrisma>[0],
-)

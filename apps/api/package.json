@@ -8,17 +8,16 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "dev:worker": "wrangler dev",
-    "build": "prisma generate && tsc",
+    "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "postinstall": "prisma generate",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset",
-    "db:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts",
-    "migrate:deploy": "prisma migrate deploy",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:migrate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio",
+    "db:seed": "tsx src/db/seed.ts",
+    "migrate:deploy": "drizzle-kit migrate",
+    "db:bootstrap": "drizzle-kit push && tsx src/db/seed.ts",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
@@ -26,13 +25,13 @@
     "@hono/swagger-ui": "^0.5.2",
     "@hono/zod-openapi": "^1.0.2",
     "@hono/zod-validator": "^0.7.3",
-    "@prisma/adapter-pg": "6.19.0",
-    "@prisma/client": "6.19.0",
+    "@neondatabase/serverless": "^1.0.2",
     "bcryptjs": "^3.0.2",
+    "drizzle-orm": "^0.44.5",
     "hono": "^4.0.0",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^7.0.5",
-    "pg": "^8.16.3",
+    "postgres": "^3.4.7",
     "stripe": "^14.0.0",
     "zod": "^4.0.10"
   },
@@ -41,20 +40,13 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.10.0",
     "@types/nodemailer": "^6.4.17",
-    "@types/pg": "^8.15.5",
     "dotenv": "^16.4.7",
-    "prisma": "6.19.0",
+    "drizzle-kit": "^0.31.4",
     "tsx": "^4.6.0",
     "typescript": "^5.3.0",
     "wrangler": "^4.28.0"
   },
   "engines": {
     "node": ">=20.19.0"
-  },
-  "imports": {
-    "#prisma": "./src/lib/prisma.ts"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   }
 }

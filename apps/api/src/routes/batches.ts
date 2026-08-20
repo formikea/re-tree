@@ -1,40 +1,42 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { prisma } from '#prisma'
+import { eq, and, desc, inArray } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { batches, nurseries, allotments } from '../db/schema.js'
 import {
   CreateBatchSchema,
   UpdateBatchSchema
 } from '../schemas/batch.js'
 import { authenticate } from '../middleware/auth.js'
 
-const batches = new Hono()
+const routes = new Hono()
 
 // Apply authentication middleware to all batch routes
-batches.use('*', authenticate)
+routes.use('*', authenticate)
+
+async function orgNurseryIds(organisationId: number) {
+  const orgNurseries = await db.select({ id: nurseries.id }).from(nurseries).where(eq(nurseries.organisationId, organisationId))
+  return orgNurseries.map(n => n.id)
+}
 
 // Get all batches for the authenticated user's organization
-batches.get('/', async (c) => {
+routes.get('/', async (c) => {
   try {
     const user = c.get('user')
+    const ids = await orgNurseryIds(user.organisationId)
     
-    const batches = await prisma.batch.findMany({
-      where: {
-        nursery: {
-          organisationId: user.organisationId
-        }
-      },
-      include: {
+    const batchList = await db.query.batches.findMany({
+      where: inArray(batches.nurseryId, ids.length ? ids : [-1]),
+      with: {
         species: true,
         nursery: true
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      orderBy: desc(batches.createdAt)
     })
 
     return c.json({
-      batches,
-      count: batches.length,
+      batches: batchList,
+      count: batchList.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -47,17 +49,17 @@ batches.get('/', async (c) => {
 })
 
 // Get batches by nursery ID (organization-scoped)
-batches.get('/nursery/:nurseryId', async (c) => {
+routes.get('/nursery/:nurseryId', async (c) => {
   try {
-    const nurseryId = parseInt(c.req.param('nurseryId'))
+    const nurseryId = parseInt(c.req.param('nurseryId') ?? '', 10)
     const user = c.get('user')
     
     // Verify that the nursery belongs to the user's organization
-    const nursery = await prisma.nursery.findFirst({
-      where: {
-        id: nurseryId,
-        organisationId: user.organisationId
-      }
+    const nursery = await db.query.nurseries.findFirst({
+      where: and(
+        eq(nurseries.id, nurseryId),
+        eq(nurseries.organisationId, user.organisationId)
+      )
     })
 
     if (!nursery) {
@@ -67,25 +69,18 @@ batches.get('/nursery/:nurseryId', async (c) => {
       }, 404)
     }
     
-    const batches = await prisma.batch.findMany({
-      where: {
-        nurseryId,
-        nursery: {
-          organisationId: user.organisationId
-        }
-      },
-      include: {
+    const batchList = await db.query.batches.findMany({
+      where: eq(batches.nurseryId, nurseryId),
+      with: {
         species: true,
         nursery: true
       },
-      orderBy: {
-        createdAt: 'desc'
-      }
+      orderBy: desc(batches.createdAt)
     })
 
     return c.json({
-      batches,
-      count: batches.length,
+      batches: batchList,
+      count: batchList.length,
       nursery: {
         id: nursery.id,
         name: nursery.name
@@ -102,25 +97,20 @@ batches.get('/nursery/:nurseryId', async (c) => {
 })
 
 // Get batch by ID (organization-scoped)
-batches.get('/:id', async (c) => {
+routes.get('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
     
-    const batch = await prisma.batch.findFirst({
-      where: { 
-        id,
-        nursery: {
-          organisationId: user.organisationId
-        }
-      },
-      include: {
+    const batch = await db.query.batches.findFirst({
+      where: eq(batches.id, id),
+      with: {
         species: true,
         nursery: true
       }
     })
 
-    if (!batch) {
+    if (!batch || batch.nursery.organisationId !== user.organisationId) {
       return c.json({ 
         error: 'Batch not found',
         timestamp: new Date().toISOString()
@@ -141,17 +131,17 @@ batches.get('/:id', async (c) => {
 })
 
 // Create new batch
-batches.post('/', zValidator('json', CreateBatchSchema), async (c) => {
+routes.post('/', zValidator('json', CreateBatchSchema), async (c) => {
   try {
     const body = c.req.valid('json')
     const user = c.get('user')
     
     // Verify that the nursery belongs to the user's organization
-    const nursery = await prisma.nursery.findFirst({
-      where: {
-        id: body.nurseryId,
-        organisationId: user.organisationId
-      }
+    const nursery = await db.query.nurseries.findFirst({
+      where: and(
+        eq(nurseries.id, body.nurseryId),
+        eq(nurseries.organisationId, user.organisationId)
+      )
     })
     
     if (!nursery) {
@@ -161,17 +151,23 @@ batches.post('/', zValidator('json', CreateBatchSchema), async (c) => {
       }, 404)
     }
     
-    const batch = await prisma.batch.create({
-      data: {
-        speciesId: body.speciesId,
-        nurseryId: body.nurseryId,
-        origin: body.origin || null,
-        quantity: body.quantity || null,
-        stage: body.stage || null,
-        isOrder: body.isOrder || false,
-        notes: body.notes || null
-      },
-      include: {
+    const [inserted] = await db.insert(batches).values({
+      speciesId: body.speciesId,
+      nurseryId: body.nurseryId,
+      origin: body.origin || null,
+      quantity: body.quantity || null,
+      stage: body.stage || null,
+      isOrder: body.isOrder || false,
+      notes: body.notes || null
+    }).returning()
+
+    if (!inserted) {
+      throw new Error('Failed to create batch')
+    }
+
+    const batch = await db.query.batches.findFirst({
+      where: eq(batches.id, inserted.id),
+      with: {
         species: true,
         nursery: true
       }
@@ -192,20 +188,19 @@ batches.post('/', zValidator('json', CreateBatchSchema), async (c) => {
 })
 
 // Update batch
-batches.put('/:id', zValidator('json', UpdateBatchSchema), async (c) => {
+routes.put('/:id', zValidator('json', UpdateBatchSchema), async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const body = c.req.valid('json')
     const user = c.get('user')
+    const ids = await orgNurseryIds(user.organisationId)
 
     // Check if batch exists and belongs to user's organization
-    const existingBatch = await prisma.batch.findFirst({
-      where: { 
-        id,
-        nursery: {
-          organisationId: user.organisationId
-        }
-      }
+    const existingBatch = await db.query.batches.findFirst({
+      where: and(
+        eq(batches.id, id),
+        inArray(batches.nurseryId, ids.length ? ids : [-1])
+      )
     })
 
     if (!existingBatch) {
@@ -217,11 +212,11 @@ batches.put('/:id', zValidator('json', UpdateBatchSchema), async (c) => {
 
     // If updating nursery, verify it belongs to the organization
     if (body.nurseryId) {
-      const nursery = await prisma.nursery.findFirst({
-        where: {
-          id: body.nurseryId,
-          organisationId: user.organisationId
-        }
+      const nursery = await db.query.nurseries.findFirst({
+        where: and(
+          eq(nurseries.id, body.nurseryId),
+          eq(nurseries.organisationId, user.organisationId)
+        )
       })
       
       if (!nursery) {
@@ -232,7 +227,7 @@ batches.put('/:id', zValidator('json', UpdateBatchSchema), async (c) => {
       }
     }
 
-    const updateData: any = {}
+    const updateData: Partial<typeof batches.$inferInsert> = { updatedAt: new Date() }
     
     if (body.speciesId !== undefined) updateData.speciesId = body.speciesId
     if (body.nurseryId !== undefined) updateData.nurseryId = body.nurseryId
@@ -243,10 +238,11 @@ batches.put('/:id', zValidator('json', UpdateBatchSchema), async (c) => {
     if (body.completedAt !== undefined) updateData.completedAt = body.completedAt || null
     if (body.notes !== undefined) updateData.notes = body.notes || null
 
-    const batch = await prisma.batch.update({
-      where: { id },
-      data: updateData,
-      include: {
+    await db.update(batches).set(updateData).where(eq(batches.id, id))
+
+    const batch = await db.query.batches.findFirst({
+      where: eq(batches.id, id),
+      with: {
         species: true,
         nursery: true
       }
@@ -267,19 +263,18 @@ batches.put('/:id', zValidator('json', UpdateBatchSchema), async (c) => {
 })
 
 // Delete batch
-batches.delete('/:id', async (c) => {
+routes.delete('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
+    const ids = await orgNurseryIds(user.organisationId)
 
     // Check if batch exists and belongs to user's organization
-    const existingBatch = await prisma.batch.findFirst({
-      where: { 
-        id,
-        nursery: {
-          organisationId: user.organisationId
-        }
-      }
+    const existingBatch = await db.query.batches.findFirst({
+      where: and(
+        eq(batches.id, id),
+        inArray(batches.nurseryId, ids.length ? ids : [-1])
+      )
     })
 
     if (!existingBatch) {
@@ -290,11 +285,11 @@ batches.delete('/:id', async (c) => {
     }
 
     // Check if batch is being used in any allotments
-    const allotmentsUsingBatch = await prisma.allotment.findMany({
-      where: { batchId: id },
-      include: {
+    const allotmentsUsingBatch = await db.query.allotments.findMany({
+      where: eq(allotments.batchId, id),
+      with: {
         season: {
-          include: {
+          with: {
             site: true
           }
         }
@@ -306,7 +301,7 @@ batches.delete('/:id', async (c) => {
         error: 'Cannot delete batch as it is being used in allotments',
         details: {
           allotmentCount: allotmentsUsingBatch.length,
-          allotments: allotmentsUsingBatch.map((allotment: any) => ({
+          allotments: allotmentsUsingBatch.map((allotment) => ({
             id: allotment.id,
             quantity: allotment.quantity,
             season: {
@@ -324,9 +319,7 @@ batches.delete('/:id', async (c) => {
       }, 409)
     }
 
-    await prisma.batch.delete({
-      where: { id }
-    })
+    await db.delete(batches).where(eq(batches.id, id))
 
     return c.json({
       message: 'Batch deleted successfully',
@@ -341,4 +334,4 @@ batches.delete('/:id', async (c) => {
   }
 })
 
-export default batches 
+export default routes

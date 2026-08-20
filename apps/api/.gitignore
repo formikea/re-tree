@@ -4,6 +4,12 @@ node_modules/
 # Build / generated
 dist/
 *.tsbuildinfo
+# Dependencies
+node_modules/
+
+# Build / generated
+dist/
+*.tsbuildinfo
 prisma/generated/
 
 # Environment

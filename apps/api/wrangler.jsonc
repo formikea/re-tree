@@ -6,9 +6,6 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	"alias": {
-		"#prisma": "./src/lib/prisma.worker.ts"
-	},
 	"workers_dev": true,
 	"preview_urls": true,
 	"vars": {
@@ -17,12 +14,6 @@
 		"SMTP_FROM": "hello@re-tree.app",
 		"SMTP_FROM_NAME": "Re-Tree"
 	},
-	"hyperdrive": [
-		{
-			"binding": "HYPERDRIVE",
-			"id": "85ba4d7d50364b93b90bdbb06c8d892e"
-		}
-	],
 	"routes": [
 		{
 			"pattern": "api.re-tree.app",

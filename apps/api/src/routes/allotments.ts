@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { prisma } from '#prisma'
+import { eq, and, desc, inArray } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { allotments, seasons, batches, nurseries } from '../db/schema.js'
 import {
   CreateAllotmentSchema,
   UpdateAllotmentSchema,
@@ -8,43 +10,50 @@ import {
 } from '../schemas/allotment.js'
 import { authenticate } from '../middleware/auth.js'
 
-const allotments = new Hono()
+const routes = new Hono()
+
+const allotmentWith = {
+  season: {
+    with: {
+      site: true
+    }
+  },
+  batch: {
+    with: {
+      species: true,
+      nursery: true
+    }
+  }
+} as const
+
+async function orgSeasonIds(organisationId: number) {
+  const orgSeasons = await db.select({ id: seasons.id }).from(seasons).where(eq(seasons.organisationId, organisationId))
+  return orgSeasons.map(s => s.id)
+}
+
+async function orgNurseryIds(organisationId: number) {
+  const orgNurseries = await db.select({ id: nurseries.id }).from(nurseries).where(eq(nurseries.organisationId, organisationId))
+  return orgNurseries.map(n => n.id)
+}
 
 // Apply authentication middleware to all allotment routes
-allotments.use('*', authenticate)
+routes.use('*', authenticate)
 
 // Get all allotments for the authenticated user's organization
-allotments.get('/', async (c) => {
+routes.get('/', async (c) => {
   try {
     const user = c.get('user')
+    const ids = await orgSeasonIds(user.organisationId)
     
-    const allotments = await prisma.allotment.findMany({
-      where: {
-        season: {
-          organisationId: user.organisationId
-        }
-      },
-      include: {
-        season: {
-          include: {
-            site: true
-          }
-        },
-        batch: {
-          include: {
-            species: true,
-            nursery: true
-          }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
+    const allotmentList = await db.query.allotments.findMany({
+      where: inArray(allotments.seasonId, ids.length ? ids : [-1]),
+      with: allotmentWith,
+      orderBy: desc(allotments.createdAt)
     })
 
     return c.json({
-      allotments,
-      count: allotments.length,
+      allotments: allotmentList,
+      count: allotmentList.length,
       timestamp: new Date().toISOString()
     })
   } catch (error) {
@@ -57,34 +66,17 @@ allotments.get('/', async (c) => {
 })
 
 // Get allotment by ID (organization-scoped)
-allotments.get('/:id', async (c) => {
+routes.get('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
     
-    const allotment = await prisma.allotment.findFirst({
-      where: { 
-        id,
-        season: {
-          organisationId: user.organisationId
-        }
-      },
-      include: {
-        season: {
-          include: {
-            site: true
-          }
-        },
-        batch: {
-          include: {
-            species: true,
-            nursery: true
-          }
-        }
-      }
+    const allotment = await db.query.allotments.findFirst({
+      where: eq(allotments.id, id),
+      with: allotmentWith
     })
 
-    if (!allotment) {
+    if (!allotment || allotment.season.organisationId !== user.organisationId) {
       return c.json({ 
         error: 'Allotment not found',
         timestamp: new Date().toISOString()
@@ -105,17 +97,17 @@ allotments.get('/:id', async (c) => {
 })
 
 // Create new allotment (single)
-allotments.post('/', zValidator('json', CreateAllotmentSchema), async (c) => {
+routes.post('/', zValidator('json', CreateAllotmentSchema), async (c) => {
   try {
     const body = c.req.valid('json')
     const user = c.get('user')
     
     // Verify that season belongs to the user's organization
-    const season = await prisma.season.findFirst({
-      where: { 
-        id: body.seasonId,
-        organisationId: user.organisationId
-      }
+    const season = await db.query.seasons.findFirst({
+      where: and(
+        eq(seasons.id, body.seasonId),
+        eq(seasons.organisationId, user.organisationId)
+      )
     })
     
     if (!season) {
@@ -125,14 +117,14 @@ allotments.post('/', zValidator('json', CreateAllotmentSchema), async (c) => {
       }, 404)
     }
 
+    const nurseryIds = await orgNurseryIds(user.organisationId)
+
     // Verify that batch belongs to the user's organization
-    const batch = await prisma.batch.findFirst({
-      where: { 
-        id: body.batchId,
-        nursery: {
-          organisationId: user.organisationId
-        }
-      }
+    const batch = await db.query.batches.findFirst({
+      where: and(
+        eq(batches.id, body.batchId),
+        inArray(batches.nurseryId, nurseryIds.length ? nurseryIds : [-1])
+      )
     })
     
     if (!batch) {
@@ -142,25 +134,19 @@ allotments.post('/', zValidator('json', CreateAllotmentSchema), async (c) => {
       }, 404)
     }
     
-    const allotment = await prisma.allotment.create({
-      data: {
-        seasonId: body.seasonId,
-        batchId: body.batchId,
-        quantity: body.quantity
-      },
-      include: {
-        season: {
-          include: {
-            site: true
-          }
-        },
-        batch: {
-          include: {
-            species: true,
-            nursery: true
-          }
-        }
-      }
+    const [inserted] = await db.insert(allotments).values({
+      seasonId: body.seasonId,
+      batchId: body.batchId,
+      quantity: body.quantity
+    }).returning()
+
+    if (!inserted) {
+      throw new Error('Failed to create allotment')
+    }
+
+    const allotment = await db.query.allotments.findFirst({
+      where: eq(allotments.id, inserted.id),
+      with: allotmentWith
     })
 
     return c.json({
@@ -178,7 +164,7 @@ allotments.post('/', zValidator('json', CreateAllotmentSchema), async (c) => {
 })
 
 // Create multiple allotments (bulk)
-allotments.post('/bulk', zValidator('json', BulkCreateAllotmentSchema), async (c) => {
+routes.post('/bulk', zValidator('json', BulkCreateAllotmentSchema), async (c) => {
   try {
     const body = c.req.valid('json')
     const user = c.get('user')
@@ -188,62 +174,52 @@ allotments.post('/bulk', zValidator('json', BulkCreateAllotmentSchema), async (c
     const batchIds = [...new Set(body.allotments.map(a => a.batchId))]
     
     // Verify all seasons belong to the user's organization
-    const seasons = await prisma.season.findMany({
-      where: { 
-        id: { in: seasonIds },
-        organisationId: user.organisationId
-      }
+    const seasonRows = await db.query.seasons.findMany({
+      where: and(
+        inArray(seasons.id, seasonIds),
+        eq(seasons.organisationId, user.organisationId)
+      )
     })
     
-    if (seasons.length !== seasonIds.length) {
+    if (seasonRows.length !== seasonIds.length) {
       return c.json({ 
         error: 'One or more seasons not found or do not belong to your organization',
         timestamp: new Date().toISOString()
       }, 404)
     }
 
+    const nurseryIds = await orgNurseryIds(user.organisationId)
+
     // Verify all batches belong to the user's organization
-    const batches = await prisma.batch.findMany({
-      where: { 
-        id: { in: batchIds },
-        nursery: {
-          organisationId: user.organisationId
-        }
-      }
+    const batchRows = await db.query.batches.findMany({
+      where: and(
+        inArray(batches.id, batchIds),
+        inArray(batches.nurseryId, nurseryIds.length ? nurseryIds : [-1])
+      )
     })
     
-    if (batches.length !== batchIds.length) {
+    if (batchRows.length !== batchIds.length) {
       return c.json({ 
         error: 'One or more batches not found or do not belong to your organization',
         timestamp: new Date().toISOString()
       }, 404)
     }
     
-    // Create all allotments in a transaction
-    const createdAllotments = await prisma.$transaction(
-      body.allotments.map(allotment => 
-        prisma.allotment.create({
-          data: {
-            seasonId: allotment.seasonId,
-            batchId: allotment.batchId,
-            quantity: allotment.quantity
-          },
-          include: {
-            season: {
-              include: {
-                site: true
-              }
-            },
-            batch: {
-              include: {
-                species: true,
-                nursery: true
-              }
-            }
-          }
-        })
-      )
-    )
+    const inserted = await db.insert(allotments).values(
+      body.allotments.map(allotment => ({
+        seasonId: allotment.seasonId,
+        batchId: allotment.batchId,
+        quantity: allotment.quantity
+      }))
+    ).returning()
+
+    const createdRows = await db.query.allotments.findMany({
+      where: inArray(allotments.id, inserted.map(r => r.id)),
+      with: allotmentWith
+    })
+
+    const byId = new Map(createdRows.map(row => [row.id, row]))
+    const createdAllotments = inserted.map(row => byId.get(row.id)!)
 
     return c.json({
       allotments: createdAllotments,
@@ -260,20 +236,19 @@ allotments.post('/bulk', zValidator('json', BulkCreateAllotmentSchema), async (c
 })
 
 // Update allotment
-allotments.put('/:id', zValidator('json', UpdateAllotmentSchema), async (c) => {
+routes.put('/:id', zValidator('json', UpdateAllotmentSchema), async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const body = c.req.valid('json')
     const user = c.get('user')
+    const seasonIds = await orgSeasonIds(user.organisationId)
 
     // Check if allotment exists and belongs to user's organization
-    const existingAllotment = await prisma.allotment.findFirst({
-      where: { 
-        id,
-        season: {
-          organisationId: user.organisationId
-        }
-      }
+    const existingAllotment = await db.query.allotments.findFirst({
+      where: and(
+        eq(allotments.id, id),
+        inArray(allotments.seasonId, seasonIds.length ? seasonIds : [-1])
+      )
     })
 
     if (!existingAllotment) {
@@ -285,11 +260,11 @@ allotments.put('/:id', zValidator('json', UpdateAllotmentSchema), async (c) => {
 
     // If updating season, verify it belongs to the organization
     if (body.seasonId) {
-      const season = await prisma.season.findFirst({
-        where: { 
-          id: body.seasonId,
-          organisationId: user.organisationId
-        }
+      const season = await db.query.seasons.findFirst({
+        where: and(
+          eq(seasons.id, body.seasonId),
+          eq(seasons.organisationId, user.organisationId)
+        )
       })
       
       if (!season) {
@@ -302,13 +277,12 @@ allotments.put('/:id', zValidator('json', UpdateAllotmentSchema), async (c) => {
 
     // If updating batch, verify it belongs to the organization
     if (body.batchId) {
-      const batch = await prisma.batch.findFirst({
-        where: { 
-          id: body.batchId,
-          nursery: {
-            organisationId: user.organisationId
-          }
-        }
+      const nurseryIds = await orgNurseryIds(user.organisationId)
+      const batch = await db.query.batches.findFirst({
+        where: and(
+          eq(batches.id, body.batchId),
+          inArray(batches.nurseryId, nurseryIds.length ? nurseryIds : [-1])
+        )
       })
       
       if (!batch) {
@@ -319,26 +293,16 @@ allotments.put('/:id', zValidator('json', UpdateAllotmentSchema), async (c) => {
       }
     }
 
-    const allotment = await prisma.allotment.update({
-      where: { id },
-      data: {
-        ...(body.seasonId !== undefined && { seasonId: body.seasonId }),
-        ...(body.batchId !== undefined && { batchId: body.batchId }),
-        ...(body.quantity !== undefined && { quantity: body.quantity })
-      },
-      include: {
-        season: {
-          include: {
-            site: true
-          }
-        },
-        batch: {
-          include: {
-            species: true,
-            nursery: true
-          }
-        }
-      }
+    await db.update(allotments).set({
+      ...(body.seasonId !== undefined && { seasonId: body.seasonId }),
+      ...(body.batchId !== undefined && { batchId: body.batchId }),
+      ...(body.quantity !== undefined && { quantity: body.quantity }),
+      updatedAt: new Date()
+    }).where(eq(allotments.id, id))
+
+    const allotment = await db.query.allotments.findFirst({
+      where: eq(allotments.id, id),
+      with: allotmentWith
     })
 
     return c.json({
@@ -356,18 +320,18 @@ allotments.put('/:id', zValidator('json', UpdateAllotmentSchema), async (c) => {
 })
 
 // Get allotments by season ID
-allotments.get('/season/:seasonId', async (c) => {
+routes.get('/season/:seasonId', async (c) => {
   try {
-    const seasonId = parseInt(c.req.param('seasonId'))
+    const seasonId = parseInt(c.req.param('seasonId') ?? '', 10)
     const user = c.get('user')
     
     // Verify that season belongs to the user's organization
-    const season = await prisma.season.findFirst({
-      where: { 
-        id: seasonId,
-        organisationId: user.organisationId
-      },
-      include: {
+    const season = await db.query.seasons.findFirst({
+      where: and(
+        eq(seasons.id, seasonId),
+        eq(seasons.organisationId, user.organisationId)
+      ),
+      with: {
         site: true
       }
     })
@@ -379,31 +343,15 @@ allotments.get('/season/:seasonId', async (c) => {
       }, 404)
     }
 
-    const allotments = await prisma.allotment.findMany({
-      where: {
-        seasonId: seasonId
-      },
-      include: {
-        season: {
-          include: {
-            site: true
-          }
-        },
-        batch: {
-          include: {
-            species: true,
-            nursery: true
-          }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
+    const allotmentList = await db.query.allotments.findMany({
+      where: eq(allotments.seasonId, seasonId),
+      with: allotmentWith,
+      orderBy: desc(allotments.createdAt)
     })
 
     return c.json({
-      allotments,
-      count: allotments.length,
+      allotments: allotmentList,
+      count: allotmentList.length,
       season: {
         id: season.id,
         year: season.year,
@@ -422,19 +370,18 @@ allotments.get('/season/:seasonId', async (c) => {
 })
 
 // Delete allotment
-allotments.delete('/:id', async (c) => {
+routes.delete('/:id', async (c) => {
   try {
-    const id = parseInt(c.req.param('id'))
+    const id = parseInt(c.req.param('id') ?? '', 10)
     const user = c.get('user')
+    const seasonIds = await orgSeasonIds(user.organisationId)
 
     // Check if allotment exists and belongs to user's organization
-    const existingAllotment = await prisma.allotment.findFirst({
-      where: { 
-        id,
-        season: {
-          organisationId: user.organisationId
-        }
-      }
+    const existingAllotment = await db.query.allotments.findFirst({
+      where: and(
+        eq(allotments.id, id),
+        inArray(allotments.seasonId, seasonIds.length ? seasonIds : [-1])
+      )
     })
 
     if (!existingAllotment) {
@@ -444,9 +391,7 @@ allotments.delete('/:id', async (c) => {
       }, 404)
     }
 
-    await prisma.allotment.delete({
-      where: { id }
-    })
+    await db.delete(allotments).where(eq(allotments.id, id))
 
     return c.json({
       message: 'Allotment deleted successfully',
@@ -461,4 +406,4 @@ allotments.delete('/:id', async (c) => {
   }
 })
 
-export default allotments 
+export default routes

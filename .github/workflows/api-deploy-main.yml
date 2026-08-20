@@ -29,13 +29,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/re_tree_db
-
-      - name: Generate Prisma client
-        run: npm run db:generate -w @re-tree/api
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/re_tree_db
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3

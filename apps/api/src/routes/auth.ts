@@ -1,9 +1,11 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { prisma } from '#prisma'
-import { loginSchema, loginResponseSchema, refreshTokenSchema, resetPasswordSchema } from '../schemas/auth.js'
+import { eq } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { users } from '../db/schema.js'
+import { hashPassword, verifyPassword } from '../lib/password.js'
+import { loginSchema, refreshTokenSchema, resetPasswordSchema } from '../schemas/auth.js'
 
 const auth = new Hono()
 
@@ -45,11 +47,9 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
     const { email, password } = c.req.valid('json')
 
     // Find user by email with organization
-    const user = await prisma.user.findUnique({
-      where: { email },
-      include: {
-        organisation: true
-      }
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, email),
+      with: { organisation: true },
     })
 
     if (!user) {
@@ -70,14 +70,21 @@ auth.post('/login', zValidator('json', loginSchema), async (c) => {
     }
 
     // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password)
+    const { ok, shouldRehash } = await verifyPassword(password, user.password)
 
-    if (!isValidPassword) {
+    if (!ok) {
       return c.json({
         error: 'Authentication failed',
         message: 'Invalid email or password',
         timestamp: new Date().toISOString()
       }, 401)
+    }
+
+    if (shouldRehash) {
+      await db
+        .update(users)
+        .set({ password: await hashPassword(password), updatedAt: new Date() })
+        .where(eq(users.id, user.id))
     }
 
     // Generate tokens
@@ -129,11 +136,9 @@ auth.post('/refresh', zValidator('json', refreshTokenSchema), async (c) => {
     }
 
     // Get user with current token version
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      include: {
-        organisation: true
-      }
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, decoded.userId),
+      with: { organisation: true },
     })
 
     if (!user) {
@@ -160,10 +165,15 @@ auth.post('/refresh', zValidator('json', refreshTokenSchema), async (c) => {
     }
 
     // Update user's token version first
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: { tokenVersion: (user.tokenVersion || 0) + 1 }
-    })
+    const [updatedUser] = await db
+      .update(users)
+      .set({ tokenVersion: (user.tokenVersion || 0) + 1, updatedAt: new Date() })
+      .where(eq(users.id, user.id))
+      .returning()
+
+    if (!updatedUser) {
+      throw new Error('Failed to update token version')
+    }
 
     // Generate new tokens with updated token version
     const { accessToken, refreshToken: newRefreshToken } = generateTokens(updatedUser)
@@ -203,10 +213,10 @@ auth.post('/logout', async (c) => {
       const decoded = jwt.verify(token, jwtSecret()) as any
       
       // Invalidate refresh token by incrementing token version
-      await prisma.user.update({
-        where: { id: decoded.userId },
-        data: { tokenVersion: (decoded.tokenVersion || 0) + 1 }
-      })
+      await db
+        .update(users)
+        .set({ tokenVersion: (decoded.tokenVersion || 0) + 1, updatedAt: new Date() })
+        .where(eq(users.id, decoded.userId))
 
       return c.json({
         message: 'Logout successful',
@@ -248,22 +258,9 @@ auth.get('/verify', async (c) => {
       const decoded = jwt.verify(token, jwtSecret()) as any
       
       // Get user details with organization
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          organisationId: true,
-          role: true,
-          organisation: {
-            select: {
-              id: true,
-              name: true
-            }
-          },
-          createdAt: true
-        }
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, decoded.userId),
+        with: { organisation: true },
       })
 
       if (!user) {
@@ -333,8 +330,8 @@ auth.post('/reset-password', zValidator('json', resetPasswordSchema), async (c) 
     const { currentPassword, newPassword } = c.req.valid('json')
 
     // Get user with current password
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId }
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, decoded.userId),
     })
 
     if (!user) {
@@ -346,9 +343,9 @@ auth.post('/reset-password', zValidator('json', resetPasswordSchema), async (c) 
     }
 
     // Verify current password
-    const isValidCurrentPassword = await bcrypt.compare(currentPassword, user.password)
+    const { ok } = await verifyPassword(currentPassword, user.password)
 
-    if (!isValidCurrentPassword) {
+    if (!ok) {
       return c.json({
         error: 'Invalid password',
         message: 'Current password is incorrect',
@@ -357,16 +354,17 @@ auth.post('/reset-password', zValidator('json', resetPasswordSchema), async (c) 
     }
 
     // Hash new password
-    const hashedNewPassword = await bcrypt.hash(newPassword, 12)
+    const hashedNewPassword = await hashPassword(newPassword)
 
     // Update password and increment token version to invalidate existing tokens
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { 
+    await db
+      .update(users)
+      .set({
         password: hashedNewPassword,
-        tokenVersion: (user.tokenVersion || 0) + 1
-      }
-    })
+        tokenVersion: (user.tokenVersion || 0) + 1,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, user.id))
 
     return c.json({
       message: 'Password updated successfully',

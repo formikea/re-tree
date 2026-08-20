@@ -1,11 +1,11 @@
 import { Context, Next } from 'hono'
 import jwt from 'jsonwebtoken'
-import { prisma } from '#prisma'
+import { eq } from 'drizzle-orm'
+import { db } from '../db/index.js'
+import { users } from '../db/schema.js'
 
-// JWT secret - should match the one in auth.ts
 const jwtSecret = () => process.env.JWT_SECRET || 'your-secret-key-change-in-production'
 
-// Extend the Context type to include user information
 declare module 'hono' {
   interface ContextVariableMap {
     user: {
@@ -21,7 +21,7 @@ declare module 'hono' {
 export const authenticate = async (c: Context, next: Next) => {
   try {
     const authHeader = c.req.header('Authorization')
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return c.json({
         error: 'Unauthorized',
@@ -30,23 +30,21 @@ export const authenticate = async (c: Context, next: Next) => {
       }, 401)
     }
 
-    const token = authHeader.substring(7) // Remove 'Bearer ' prefix
-    console.log(token)
+    const token = authHeader.substring(7)
 
     try {
-      const decoded = jwt.verify(token, jwtSecret()) as any
-      
-      // Get user details from database
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
-        select: {
+      const decoded = jwt.verify(token, jwtSecret()) as { userId: number }
+
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, decoded.userId),
+        columns: {
           id: true,
           email: true,
           name: true,
           organisationId: true,
           role: true,
-          emailVerified: true
-        }
+          emailVerified: true,
+        },
       })
 
       if (!user) {
@@ -57,7 +55,6 @@ export const authenticate = async (c: Context, next: Next) => {
         }, 401)
       }
 
-      // Check if user email is verified
       if (!user.emailVerified) {
         return c.json({
           error: 'Unauthorized',
@@ -66,11 +63,9 @@ export const authenticate = async (c: Context, next: Next) => {
         }, 401)
       }
 
-      // Set user in context for use in route handlers
       c.set('user', user)
-      
       return await next()
-    } catch (jwtError) {
+    } catch {
       return c.json({
         error: 'Unauthorized',
         message: 'Invalid or expired token',
@@ -85,4 +80,4 @@ export const authenticate = async (c: Context, next: Next) => {
       timestamp: new Date().toISOString()
     }, 500)
   }
-} 
+}
