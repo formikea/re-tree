@@ -43,40 +43,6 @@ npm run dev:website               # terminal 3 → :3001
 Use `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/re_tree_db` in
 `apps/api/.env` when the API runs on the host.
 
-### Full stack in Docker
-
-```bash
-docker compose up -d              # or: make dev
-```
-
-- API:     <http://localhost:5000>
-- Client:  <http://localhost:3000>
-- Website: <http://localhost:3001>
-- DB:      `localhost:5432` (postgres / value of `POSTGRES_PASSWORD`)
-
-Inside Compose, the `api` service forces `DATABASE_URL` to the `postgres` host.
-
-## Top-level commands
-
-On the host, `make` npm targets run via `docker compose exec` against the `api`
-service (start the stack first with `make up` / `docker compose up -d`). With a
-local Node install you can also run the equivalent root `npm` scripts directly:
-
-```bash
-make dev            # start the stack
-make install        # npm ci (workspace root)
-make lint           # eslint (apps that define it)
-make typecheck      # tsc --noEmit
-make db-push            # drizzle-kit push
-make db-migrate-new MSG="add foo"
-make seed               # seed local database
-make db-bootstrap       # push schema + seed
-make shell-api
-make shell-client
-make shell-website
-make shell-db       # psql into postgres
-make clean          # docker compose down -v  (DESTROYS local db)
-```
 
 ## Environment
 
