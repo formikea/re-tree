@@ -13,13 +13,37 @@ import seasons from './routes/seasons.js'
 import allotments from './routes/allotments.js'
 import nurseries from './routes/nurseries.js'
 import { stripe } from './routes/stripe.js'
+import { authRateLimit } from './middleware/rate-limit.js'
 
 
 const app = new Hono()
 
+const allowedOrigins = new Set([
+  'https://app.re-tree.app',
+  'https://re-tree.app',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+])
+
 // Middleware
 app.use('*', logger())
-app.use('*', cors())
+app.use(
+  '*',
+  cors({
+    origin: (origin) => {
+      // Non-browser clients (curl, Workers, same-origin) may omit Origin
+      if (!origin) return origin
+      return allowedOrigins.has(origin) ? origin : null
+    },
+    allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization'],
+    exposeHeaders: ['Content-Length'],
+    maxAge: 600,
+    credentials: true,
+  }),
+)
 
 // Middleware to check if documentation should be available
 const docsMiddleware = async (c: any, next: any) => {
@@ -3507,7 +3531,11 @@ app.get('/api/hello', (c) => {
   })
 })
 
-// Auth routes
+// Auth routes — rate-limit unauthenticated abuse surfaces
+app.use('/api/auth/login', authRateLimit)
+app.use('/api/auth/refresh', authRateLimit)
+app.use('/api/auth/reset-password', authRateLimit)
+app.use('/api/organization/invite/*', authRateLimit)
 app.route('/api/auth', auth)
 
 // Admin routes (protected by admin middleware)

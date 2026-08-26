@@ -1,4 +1,5 @@
 import app from './index.js'
+import type { RateLimitBinding } from './middleware/rate-limit.js'
 
 type Env = {
   DATABASE_URL?: string
@@ -13,6 +14,7 @@ type Env = {
   SMTP_FROM_NAME?: string
   STRIPE_SECRET_KEY?: string
   STRIPE_WEBHOOK_SECRET?: string
+  AUTH_RATE_LIMITER?: RateLimitBinding
 }
 
 function applyEnv(env: Env) {
