@@ -13,6 +13,7 @@ import seasons from './routes/seasons.js'
 import allotments from './routes/allotments.js'
 import nurseries from './routes/nurseries.js'
 import { stripe } from './routes/stripe.js'
+import { authRateLimit } from './middleware/rate-limit.js'
 
 
 const app = new Hono()
@@ -3530,7 +3531,11 @@ app.get('/api/hello', (c) => {
   })
 })
 
-// Auth routes
+// Auth routes — rate-limit unauthenticated abuse surfaces
+app.use('/api/auth/login', authRateLimit)
+app.use('/api/auth/refresh', authRateLimit)
+app.use('/api/auth/reset-password', authRateLimit)
+app.use('/api/organization/invite/*', authRateLimit)
 app.route('/api/auth', auth)
 
 // Admin routes (protected by admin middleware)
